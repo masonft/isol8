@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>How isol8 works</title>
+  <meta name="description" content="How phase cancellation pulls hidden sounds out of repeated sections of a song.">
+  <meta name="theme-color" content="#06070c">
+  <meta name="color-scheme" content="dark light">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2306070c'/%3E%3Cpath d='M8 32c6-16 11-16 16 0s11 16 16 0 11-16 16 0' fill='none' stroke='%23ffb547' stroke-width='4.5' stroke-linecap='round'/%3E%3Cpath d='M8 32c6 16 11 16 16 0s11-16 16 0 11 16 16 0' fill='none' stroke='%2352e0e8' stroke-width='4.5' stroke-linecap='round'/%3E%3C/svg%3E">
+  <script src="theme.js"></script>
+  <script src="github.js" defer></script>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="how.css">
+</head>
+<body class="how-page">
+  <div class="backdrop" aria-hidden="true"><i class="orb a"></i><i class="orb b"></i><i class="orb c"></i></div>
+
+  <header class="top">
+    <a class="brand" href="./" aria-label="isol8 home">
+      <svg viewBox="0 0 44 28" aria-hidden="true" class="logo">
+        <path class="w1" d="M2 14c4-11 8-11 12 0s8 11 12 0 8-11 12 0 4 5 4 5" fill="none" stroke="#ffb547" stroke-width="2.4" stroke-linecap="round"/>
+        <path class="w2" d="M2 14c4 11 8 11 12 0s8-11 12 0 8 11 12 0 4-5 4-5" fill="none" stroke="#52e0e8" stroke-width="2.4" stroke-linecap="round"/>
+      </svg>
+      <span class="wordmark">isol8<span class="tld">.it</span></span>
+    </a>
+    <nav class="nav" aria-label="Pages">
+      <a href="./">Isolate</a>
+      <a href="how.html" aria-current="page">How it works</a>
+    </nav>
+    <div class="header-tools">
+      <a class="btn primary small top-cta" href="./">Try it</a>
+      <a class="icon-btn gh" href="https://github.com/masonft/isol8" target="_blank" rel="noopener noreferrer" aria-label="isol8 on GitHub" title="isol8 on GitHub" data-gh-stars>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        <span class="gh-stars" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 .8l2.2 4.6 5 .7-3.6 3.5.9 5L8 12.2 3.5 14.6l.9-5L.8 6.1l5-.7z"/></svg><span class="gh-count"></span></span>
+      </a>
+      <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to light mode">
+        <svg class="i-sun" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 1.8v2.1M10 16.1v2.1M1.8 10h2.1M16.1 10h2.1M4.2 4.2l1.5 1.5M14.3 14.3l1.5 1.5M4.2 15.8l1.5-1.5M14.3 5.7l1.5-1.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <svg class="i-moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M16.5 12.6A7 7 0 0 1 7.4 3.5a7 7 0 1 0 9.1 9.1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="how">
+    <section class="how-hero">
+      <h1 class="reveal">Two copies in.<br><span class="grad-text">One secret out.</span></h1>
+      <p class="lede reveal">When a producer copies a chorus and pastes it later in the song, the two copies are identical down to the last sample. Anything added on top of only one of them — an ad-lib, a riser, a vocal chop — is the only thing that differs. Subtract one copy from the other, and that's all you hear.</p>
+      <div class="hero-demo reveal">
+        <canvas class="demo" data-demo="hero" aria-label="Two waveforms drifting into alignment and cancelling, leaving a small hidden sound"></canvas>
+      </div>
+    </section>
+
+    <section class="steps" aria-label="The four steps">
+      <article class="how-step in-view">
+        <div class="how-copy">
+          <h2>Find the twins</h2>
+          <p>Songs repeat themselves, but most repeats are played or sung again and never line up exactly. What isol8 is after are sections that were <strong>copied</strong>: the same block of audio pasted in twice by the producer.</p>
+          <p>It builds a spectral fingerprint of the whole song and compares every moment with every other one, at every possible offset. Copies show up as long diagonal streaks of near-perfect similarity.</p>
+        </div>
+        <figure class="how-fig"><canvas class="demo" data-demo="find" aria-label="A song waveform with two matching sections joined by an arc"></canvas>
+          <figcaption><span class="k amber"></span>Copied section <span class="k cyan"></span>Its twin</figcaption></figure>
+      </article>
+
+      <article class="how-step in-view">
+        <div class="how-copy">
+          <h2>Line them up to the sample</h2>
+          <p>The fingerprint finds the copy to within about 50 ms. That's nowhere near close enough. At 44.1 kHz there are 44,100 samples per second and the copy has to land on the <strong>exact</strong> one.</p>
+          <p>isol8 cross-correlates the raw audio around the guess, then tries the best few offsets and keeps the one that cancels deepest.</p>
+        </div>
+        <figure class="how-fig"><canvas class="demo" data-demo="align" aria-label="The copy sliding over its twin until the offset reaches zero"></canvas>
+          <figcaption class="mono" data-readout="align">offset: — samples</figcaption></figure>
+      </article>
+
+      <article class="how-step in-view">
+        <div class="how-copy">
+          <h2>Flip the phase</h2>
+          <p>Inverting the phase turns the copy upside down: every peak becomes a trough. On its own it sounds exactly the same. Played against the original, the two push the speaker in opposite directions at the same instant.</p>
+        </div>
+        <figure class="how-fig"><canvas class="demo" data-demo="flip" aria-label="The copied waveform flipping upside down"></canvas>
+          <figcaption><span class="k amber"></span>Copy, phase inverted</figcaption></figure>
+      </article>
+
+      <article class="how-step in-view">
+        <div class="how-copy">
+          <h2>Add them together</h2>
+          <p>Everything the two copies share cancels to silence. Whatever was only in one of them survives — that's the isolated result. In numbers: <code>result = twin − copy</code>.</p>
+          <p>isol8 measures how deep the cancellation goes (in dB) frame by frame, and keeps the stretch where it holds.</p>
+        </div>
+        <figure class="how-fig"><canvas class="demo" data-demo="sum" aria-label="The twin and the inverted copy summing to a quiet line with one surviving sound"></canvas>
+          <figcaption><span class="k cyan"></span>Twin <span class="k amber"></span>Inverted copy <span class="k lilac"></span>What survives</figcaption></figure>
+      </article>
+    </section>
+
+    <section class="playground in-view" aria-labelledby="pgHead">
+      <div class="pg-copy">
+        <h2 id="pgHead">Why one sample matters</h2>
+        <p>Drag the copy out of line. Even a single sample of error leaves the high frequencies behind, and a few samples ruin the cancellation completely. It's also why isol8 never resamples your song: converting the rate would turn a whole-sample offset into a fractional one.</p>
+      </div>
+      <div class="pg-panel glass">
+        <canvas class="demo" data-demo="misalign" aria-label="Residue left by the misaligned copy"></canvas>
+        <div class="pg-controls">
+          <label for="mis">Copy offset</label>
+          <input type="range" id="mis" min="0" max="24" step="1" value="0">
+          <output id="misOut" for="mis">0 samples</output>
+          <span class="pg-db"><span id="misDb">−∞</span> dB left</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="inverse-sec in-view" aria-labelledby="invHead">
+      <div class="how-copy">
+        <h2 id="invHead">Taking it out instead</h2>
+        <p>Flip the isolated result and lay it back over the twin, and the hidden sound comes <em>out</em> of that section instead. isol8 does this across the whole track when you export <strong>Song without this sound</strong>: the full song, with that one sound gone.</p>
+        <p class="aside-note">Over the section itself, <code>twin − (twin − copy)</code> is just the copy, sample for sample — so the result is the song with the twin swapped for its clean sibling.</p>
+      </div>
+      <figure class="how-fig"><canvas class="demo" data-demo="inverse" aria-label="The isolated sound being subtracted from the twin"></canvas>
+        <figcaption><span class="k cyan"></span>Twin <span class="k lilac"></span>Isolated, inverted <span class="k mint"></span>Without it</figcaption></figure>
+    </section>
+
+    <section class="limits in-view" aria-labelledby="limHead">
+      <h2 id="limHead">When it won't work</h2>
+      <div class="limit-grid">
+        <div class="limit"><h3>Played twice</h3><p>A chorus sung or played again is never identical. Only copy-pasted audio cancels.</p></div>
+        <div class="limit"><h3>Bus processing</h3><p>A limiter or compressor over the whole mix reacts differently to each copy, so they stop matching.</p></div>
+        <div class="limit"><h3>Lossy files</h3><p>MP3 and AAC encode each copy a little differently. It still works, but leaves a faint hiss.</p></div>
+        <div class="limit"><h3>Stretched or retuned</h3><p>If the copy was time-stretched, pitched or moved off the sample grid, it can't line up.</p></div>
+      </div>
+    </section>
+
+    <section class="private in-view">
+      <div class="private-card glass">
+        <span class="dot" aria-hidden="true"></span>
+        <div>
+          <h2>All of this happens in your browser</h2>
+          <p>The song is decoded, scanned and encoded inside the tab. Nothing is uploaded, so the audio never leaves your device.</p>
+        </div>
+        <a class="btn primary" href="./">Isolate a song <span class="arrow" aria-hidden="true">→</span></a>
+      </div>
+    </section>
+  </main>
+
+
+  <script src="how.js"></script>
+</body>
+</html>

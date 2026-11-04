@@ -1,0 +1,95 @@
+/* How it works page. Shares tokens and components with styles.css. */
+.how { max-width: 1120px; }
+.how h2 { font-size: clamp(26px, 3vw, 36px); letter-spacing: -0.03em; line-height: 1.1; margin-bottom: 16px; }
+.how p { color: var(--text-2); margin: 0 0 14px; font-size: 16px; }
+.how strong { color: var(--text); font-weight: 600; }
+.how em { color: var(--text); }
+.how code { font: 13.5px var(--mono); color: var(--lilac); background: var(--surface-2); border: 1px solid var(--line); padding: 1px 6px; border-radius: 6px; }
+
+.how-hero { text-align: center; padding: clamp(40px, 8vh, 90px) 0 30px; }
+.how-hero h1 { font-size: clamp(42px, 7vw, 84px); line-height: 1; letter-spacing: -0.045em; font-weight: 700; margin-bottom: 22px; }
+.how-hero .lede { max-width: 62ch; margin: 0 auto 40px; font-size: 17px; }
+.how-hero .reveal:nth-child(1) { animation-delay: 0.05s; }
+.how-hero .reveal:nth-child(2) { animation-delay: 0.15s; }
+.how-hero .reveal:nth-child(3) { animation-delay: 0.25s; }
+.how-hero .reveal:nth-child(4) { animation-delay: 0.4s; }
+.hero-demo {
+  height: clamp(220px, 32vw, 320px); border-radius: var(--r-xl); overflow: hidden; border: 1px solid var(--line);
+  background: radial-gradient(100% 80% at 50% 0%, var(--surface), transparent 60%), var(--stage-2);
+  box-shadow: inset 0 1px 0 var(--hl), 0 40px 80px -40px var(--shadow);
+}
+canvas.demo { display: block; width: 100%; height: 100%; }
+
+.steps { display: flex; flex-direction: column; gap: clamp(60px, 10vh, 110px); padding: clamp(60px, 10vh, 100px) 0; position: relative; }
+.steps::before { /* the thread that ties the steps together */
+  content: ""; position: absolute; left: 50%; top: 40px; bottom: 40px; width: 1px;
+  background: linear-gradient(180deg, transparent, var(--line-2) 10%, var(--line-2) 90%, transparent);
+}
+.how-step { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(32px, 6vw, 80px); align-items: center; position: relative; }
+.how-step::before {
+  content: ""; position: absolute; left: 50%; top: 50%; width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; border-radius: 50%;
+  background: var(--bg); border: 2px solid var(--cyan); box-shadow: 0 0 14px var(--cyan);
+  transform: scale(0); transition: transform 0.6s var(--ease-spring) 0.3s;
+}
+.how-step.shown::before { transform: scale(1); }
+.how-step:nth-child(even) .how-copy { order: 2; }
+.how-step .how-copy { transition-delay: 0.1s; }
+.how-fig { margin: 0; }
+.how-fig canvas {
+  height: 240px; border-radius: var(--r-lg); border: 1px solid var(--line);
+  background: radial-gradient(100% 80% at 50% 0%, var(--surface), transparent 60%), var(--stage-2);
+  box-shadow: inset 0 1px 0 var(--hl), 0 30px 60px -30px var(--shadow);
+}
+.how-fig figcaption { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; margin-top: 12px; font-size: 12.5px; color: var(--text-3); }
+.how-fig figcaption.mono { font-family: var(--mono); color: var(--text-2); }
+.k { display: inline-block; width: 14px; height: 3px; border-radius: 2px; margin-left: 8px; }
+.k:first-child { margin-left: 0; }
+.k.amber { background: var(--amber); } .k.cyan { background: var(--cyan); } .k.lilac { background: var(--lilac); } .k.mint { background: var(--mint); }
+
+.playground { display: grid; grid-template-columns: 5fr 7fr; gap: clamp(32px, 5vw, 64px); align-items: center; padding: 20px 0 clamp(60px, 10vh, 100px); }
+.pg-panel { border-radius: var(--r-xl); padding: 14px; }
+.pg-panel canvas { height: 220px; border-radius: var(--r-lg); background: var(--well); }
+.pg-controls { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 16px 8px 6px; font-size: 13.5px; color: var(--text-2); }
+.pg-controls output { font-family: var(--mono); color: var(--amber); min-width: 90px; }
+.pg-db { margin-left: auto; font-family: var(--mono); color: var(--text-3); }
+.pg-db span { color: var(--lilac); font-size: 18px; transition: color 0.3s; }
+.pg-db.bad span { color: var(--danger); }
+input[type="range"] { -webkit-appearance: none; appearance: none; flex: 1 1 160px; height: 4px; border-radius: 4px; background: linear-gradient(90deg, var(--amber) var(--p, 0%), var(--surface-3) var(--p, 0%)); cursor: pointer; }
+input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 4px rgba(255, 181, 71, 0.25), 0 2px 8px rgba(0, 0, 0, 0.5); transition: transform 0.2s var(--ease-spring); }
+input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.15); }
+input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border: 0; border-radius: 50%; background: #fff; box-shadow: 0 0 0 4px rgba(255, 181, 71, 0.25); }
+
+.inverse-sec { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(32px, 6vw, 80px); align-items: center; padding-bottom: clamp(60px, 10vh, 100px); }
+.aside-note { font-size: 14.5px !important; padding: 14px 16px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); }
+
+.limits { padding-bottom: clamp(60px, 10vh, 100px); }
+.limit-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.limit { padding: 20px; border-radius: var(--r-lg); background: linear-gradient(180deg, var(--surface-2), transparent 130%); border: 1px solid var(--line); transition: transform 0.4s var(--ease-out), border-color 0.3s; }
+.limit:hover { transform: translateY(-3px); border-color: var(--line-2); }
+.limit h3 { font-size: 16px; margin-bottom: 8px; }
+.limit p { font-size: 14px; margin: 0; }
+.limits.shown .limit { animation: rise 0.8s var(--ease-out) both; }
+.limits .limit:nth-child(2) { animation-delay: 0.08s; } .limits .limit:nth-child(3) { animation-delay: 0.16s; } .limits .limit:nth-child(4) { animation-delay: 0.24s; }
+
+.private { padding-bottom: 60px; }
+.private-card { display: flex; align-items: center; gap: 22px; padding: 28px 32px; border-radius: var(--r-xl); flex-wrap: wrap; }
+.private-card > div { flex: 1 1 320px; }
+.private-card h2 { font-size: 22px; margin-bottom: 6px; }
+.private-card p { margin: 0; font-size: 15px; }
+.private-card .dot { position: relative; flex: none; width: 12px; height: 12px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 16px var(--mint); }
+.private-card .dot::after { content: ""; position: absolute; inset: -6px; border-radius: 50%; border: 1px solid var(--mint); animation: ping 2.4s var(--ease-out) infinite; }
+
+@media (max-width: 860px) {
+  .steps::before, .how-step::before { display: none; }
+  .how-step, .playground, .inverse-sec { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .how-step:nth-child(even) .how-copy { order: 0; }
+  .limit-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .how-hero { text-align: left; }
+  .how-hero .lede { margin-left: 0; }
+}
+@media (max-width: 520px) {
+  .limit-grid { grid-template-columns: minmax(0, 1fr); }
+  .how-fig canvas { height: 200px; }
+  .private-card { padding: 22px; }
+  .top-cta { padding: 8px 14px; }
+}

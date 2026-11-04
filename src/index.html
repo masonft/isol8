@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>isol8</title>
+  <meta name="description" content="Find a song's repeated sections, flip one over the other, and hear what's left. Runs entirely in your browser.">
+  <meta name="theme-color" content="#06070c">
+  <meta name="color-scheme" content="dark light">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2306070c'/%3E%3Cpath d='M8 32c6-16 11-16 16 0s11 16 16 0 11-16 16 0' fill='none' stroke='%23ffb547' stroke-width='4.5' stroke-linecap='round'/%3E%3Cpath d='M8 32c6 16 11 16 16 0s11-16 16 0 11 16 16 0' fill='none' stroke='%2352e0e8' stroke-width='4.5' stroke-linecap='round'/%3E%3C/svg%3E">
+  <script src="theme.js"></script>
+  <script src="github.js" defer></script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="app-page">
+  <div class="backdrop" aria-hidden="true"><i class="orb a"></i><i class="orb b"></i><i class="orb c"></i></div>
+
+  <header class="top">
+    <a class="brand" href="./" aria-label="isol8, start over">
+      <svg viewBox="0 0 44 28" aria-hidden="true" class="logo">
+        <path class="w1" d="M2 14c4-11 8-11 12 0s8 11 12 0 8-11 12 0 4 5 4 5" fill="none" stroke="#ffb547" stroke-width="2.4" stroke-linecap="round"/>
+        <path class="w2" d="M2 14c4 11 8 11 12 0s8-11 12 0 8 11 12 0 4-5 4-5" fill="none" stroke="#52e0e8" stroke-width="2.4" stroke-linecap="round"/>
+      </svg>
+      <span class="wordmark">isol8<span class="tld">.it</span></span>
+    </a>
+    <nav class="nav" aria-label="Pages">
+      <a href="./" aria-current="page">Isolate</a>
+      <a href="how.html">How it works</a>
+    </nav>
+    <div class="header-tools">
+      <a class="icon-btn gh" href="https://github.com/masonft/isol8" target="_blank" rel="noopener noreferrer" aria-label="isol8 on GitHub" title="isol8 on GitHub" data-gh-stars>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        <span class="gh-stars" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 .8l2.2 4.6 5 .7-3.6 3.5.9 5L8 12.2 3.5 14.6l.9-5L.8 6.1l5-.7z"/></svg><span class="gh-count"></span></span>
+      </a>
+      <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to light mode">
+        <svg class="i-sun" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 1.8v2.1M10 16.1v2.1M1.8 10h2.1M16.1 10h2.1M4.2 4.2l1.5 1.5M14.3 14.3l1.5 1.5M4.2 15.8l1.5-1.5M14.3 5.7l1.5-1.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <svg class="i-moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M16.5 12.6A7 7 0 0 1 7.4 3.5a7 7 0 1 0 9.1 9.1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <nav class="session" id="session" aria-label="Songs in this session" hidden>
+    <ul id="sessionList"></ul>
+    <button class="add-song ghosty" id="settingsBtn" type="button" aria-expanded="false" aria-controls="settings"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h7M12.5 4.5h1M2.5 11.5h1M6.5 11.5h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="11" cy="4.5" r="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="5" cy="11.5" r="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>Settings<span class="changed-dot" hidden></span></button>
+    <button class="add-song" id="addSong" type="button">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      Add a song
+    </button>
+  </nav>
+
+  <noscript><p class="noscript">isol8 runs entirely in your browser and needs JavaScript turned on.</p></noscript>
+
+  <main>
+    <section class="scope empty" id="scope" aria-label="Song overview">
+      <canvas id="scopeCanvas" aria-hidden="true"></canvas>
+      <div class="scope-overlay" id="dropPrompt">
+        <h1 class="reveal">Hear what's <em>hiding</em><br>inside a song.</h1>
+        <p class="lede reveal">isol8 finds passages that repeat sample for sample, flips one copy over the other, and plays you whatever doesn't cancel.</p>
+        <div class="cta reveal">
+          <button class="btn primary" id="chooseFile" type="button">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 11V3M4.5 6.5 8 3l3.5 3.5M3 13h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Choose a song
+          </button>
+          <a class="btn ghost" href="how.html">How it works <span aria-hidden="true" class="arrow">→</span></a>
+        </div>
+        <p class="formats reveal">Or drop files anywhere. MP3, FLAC, WAV, AIFF, OGG, Opus or M4A.</p>
+        <button class="settings-link reveal" id="settingsToggle" type="button" aria-expanded="false" aria-controls="settings"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h7M12.5 4.5h1M2.5 11.5h1M6.5 11.5h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="11" cy="4.5" r="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="5" cy="11.5" r="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>Advanced settings<span class="changed-dot" hidden></span></button>
+      </div>
+      <div class="scope-meta" id="trackMeta" hidden>
+        <span class="title" id="trackTitle"></span>
+        <span class="facts" id="trackFacts"></span>
+        <span class="quality" id="quality" role="note" tabindex="0" hidden>
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8 15 14H1z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M8 6v3.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11.6" r=".9" fill="currentColor"/></svg>
+          <span id="qualityText"></span>
+        </span>
+      </div>
+      <div class="scope-status" id="status" role="status" aria-live="polite" hidden>
+        <div class="stage-line"><strong id="stageText">Reading audio</strong><span id="stagePct"></span></div>
+        <div class="bar"><i id="stageBar"></i></div>
+      </div>
+      <div class="scope-legend" id="scopeLegend" hidden>
+        <span class="l-src">Copied section</span><span class="l-dst">Its twin</span>
+      </div>
+      <div class="drop-hint" aria-hidden="true"><span>Drop to analyse</span></div>
+    </section>
+    <input type="file" id="fileInput" accept="audio/*,.flac,.mp3,.wav,.aif,.aiff,.ogg,.opus,.m4a,.webm" multiple hidden>
+
+    <section class="settings glass" id="settings" aria-labelledby="settingsHead" hidden>
+      <div class="settings-head">
+        <div>
+          <h2 id="settingsHead">Advanced settings</h2>
+          <p class="sub" id="settingsSub">Applies to songs you add from now on.</p>
+        </div>
+        <div class="settings-actions">
+          <button class="btn ghost small" id="settingsReset" type="button" disabled>Reset all</button>
+          <button class="btn primary small" id="reanalyse" type="button" hidden>Re-analyse</button>
+          <button class="icon-close" id="settingsClose" type="button" aria-label="Close settings"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
+        </div>
+      </div>
+      <div class="settings-body" id="settingsBody"></div>
+    </section>
+
+    <section class="intro" id="intro" aria-label="What isol8 does">
+      <article class="step-card reveal">
+        <svg viewBox="0 0 64 32" aria-hidden="true"><path d="M2 16h8l3-9 4 18 4-14 3 8 3-3h6" class="sc-a"/><path d="M34 16h8l3-9 4 18 4-14 3 8 3-3h3" class="sc-b"/></svg>
+        <span class="step-n">1</span>
+        <h3>Find the twins</h3>
+        <p>A spectral scan maps every passage that was pasted in more than once.</p>
+      </article>
+      <article class="step-card reveal">
+        <svg viewBox="0 0 64 32" aria-hidden="true"><path d="M4 16c6-12 10-12 14 0s8 12 14 0 8-12 14 0 8 12 14 0" class="sc-a"/><path d="M4 16c6 12 10 12 14 0s8-12 14 0 8 12 14 0 8-12 14 0" class="sc-b"/></svg>
+        <span class="step-n">2</span>
+        <h3>Lock and flip</h3>
+        <p>One copy is aligned to the exact sample and its phase inverted.</p>
+      </article>
+      <article class="step-card reveal">
+        <svg viewBox="0 0 64 32" aria-hidden="true"><path d="M2 16h18l2-6 3 12 2-8 2 4h35" class="sc-c"/></svg>
+        <span class="step-n">3</span>
+        <h3>Hear the difference</h3>
+        <p>Everything shared cancels to silence. What's left is the hidden part.</p>
+      </article>
+    </section>
+
+    <div class="workbench" id="workbench" hidden>
+      <div class="bench">
+      <section class="results panel glass" aria-labelledby="resultsHead">
+        <div class="panel-head">
+          <h2 id="resultsHead">Twin sections</h2>
+          <span class="aside pill" id="resultsAside"></span>
+        </div>
+        <ol class="result-list" id="resultList"></ol>
+        <div class="more"><button class="btn ghost small" id="showMore" type="button" hidden></button></div>
+        <div class="empty" id="noResults" role="status" hidden>
+          <svg viewBox="0 0 64 32" aria-hidden="true"><path class="e-a" d="M2 16c5-11 9-11 14 0s9 11 14 0 9-11 14 0 9 11 14 0"/><path class="e-b" d="M6 16c5 11 9 11 14 0s9-11 14 0 9 11 14 0 9-11 14 0"/></svg>
+          <h3>Not every song works</h3>
+          <p>isol8 couldn't find two sections that cancel. It needs a passage that was copied and pasted in the producer's session, sample for sample, like a chorus pasted in twice. Songs that were played or sung all the way through, re-recorded repeats, or heavily processed masters won't cancel.</p>
+          <p class="empty-hint">Try another song. If you know a repeat is in there, open <strong>Debug the detection</strong> below to see why it was missed.</p>
+        </div>
+      </section>
+
+      <section class="player panel glass" id="player" aria-labelledby="playerHead" hidden>
+        <div class="panel-head">
+          <h2 id="playerHead"><span class="num" id="playerNum"></span><span id="playerTitle"></span></h2>
+          <span class="aside pill" id="playerKind"></span>
+        </div>
+        <div class="wave-wrap" id="waveWrap" role="slider" tabindex="0" aria-label="Playback position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <canvas id="waveCanvas"></canvas>
+        </div>
+        <div class="wave-times"><span id="waveStart"></span><span id="waveEnd"></span></div>
+        <div class="spectrum">
+          <canvas id="specCanvas" aria-hidden="true"></canvas>
+          <div class="spec-meta"><span class="spec-title">Spectrum</span><span class="spec-db" id="specDb" aria-live="off"></span></div>
+          <div class="spec-legend" aria-hidden="true"><span class="k cyan"></span>Twin <span class="k band"></span>Cancelled <span class="k lilac"></span>Isolated</div>
+        </div>
+        <div class="transport">
+          <button class="play" id="playBtn" type="button" aria-label="Play">
+            <svg viewBox="0 0 16 16" aria-hidden="true" id="playIcon"><path d="M4 2.5v11l9-5.5z" fill="currentColor"/></svg>
+          </button>
+          <div class="clock-wrap">
+            <span class="clock" id="clock">0:00.0 / 0:00.0</span>
+            <label class="loop"><input type="checkbox" id="loop" checked><span class="switch" aria-hidden="true"></span> Loop</label>
+          </div>
+          <div class="modes" role="group" aria-label="What to hear">
+            <span class="mode-pill" aria-hidden="true"></span>
+            <button type="button" data-mode="iso" aria-pressed="true" title="Isolated: twin minus copy (key 1)">Isolated</button>
+            <button type="button" data-mode="dst" aria-pressed="false" title="The original twin section (key 2)">Twin</button>
+            <button type="button" data-mode="src" aria-pressed="false" title="The copied section (key 3)">Copy</button>
+          </div>
+        </div>
+        <p class="mode-note" id="modeNote" aria-live="polite"></p>
+        <dl class="facts-grid">
+          <div class="src"><dt>Copied from</dt><dd id="fSrc"></dd></div>
+          <div class="dst"><dt>Lands on</dt><dd id="fDst"></dd></div>
+          <div><dt>Length</dt><dd id="fLen"></dd></div>
+          <div><dt>Cancels by</dt><dd id="fDb"></dd></div>
+        </dl>
+        <div class="tune">
+          <span class="label">Alignment</span>
+          <div class="nudge">
+            <button type="button" id="nudgeDown" aria-label="Move the copy one sample earlier">−1</button>
+            <output id="lagOut" aria-live="polite"></output>
+            <button type="button" id="nudgeUp" aria-label="Move the copy one sample later">+1</button>
+          </div>
+          <button class="reset" type="button" id="nudgeReset" hidden>Back to best fit</button>
+          <p class="hint">Offset between the two copies, in samples. isol8 picks the one that cancels most; nudge it to compare.</p>
+        </div>
+        <div class="export">
+          <label class="field">
+            <span>Export</span>
+            <select id="exportWhat">
+              <option value="iso">Isolated sound</option>
+              <option value="invSong">Song without this sound</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Format</span>
+            <select id="exportFormat">
+              <option value="mp3" selected>MP3, 320 kbps</option>
+              <option value="f32">WAV, 32-bit float (exact)</option>
+              <option value="s24">WAV, 24-bit</option>
+              <option value="s16">WAV, 16-bit</option>
+            </select>
+          </label>
+          <button class="btn primary" id="download" type="button">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span id="downloadLabel">Download</span>
+          </button>
+        </div>
+      </section>
+
+      </div>
+
+      <details class="debug panel glass" id="debug">
+        <summary><span>Missing a section? Debug the detection</span><span class="aside pill" id="debugSummary"></span></summary>
+        <div class="debug-body">
+          <div class="debug-block">
+            <h3>What each stage kept</h3>
+            <ol class="pipeline" id="pipeline"></ol>
+            <p class="debug-hint" id="pipelineHint"></p>
+          </div>
+          <div class="debug-block">
+            <h3>Check a pair you know about</h3>
+            <p class="debug-hint">Listen through the song, drag to mark the copy and then its twin (roughly is fine), or type the times. isol8 lines them up to the sample and tells you which stage drops the pair.</p>
+            <div class="picker">
+              <div class="picker-bar">
+                <div class="pick-modes" role="radiogroup" aria-label="What dragging on the song does">
+                  <button type="button" role="radio" data-pick="listen" aria-checked="true">Listen</button>
+                  <button type="button" role="radio" data-pick="src" aria-checked="false"><i class="sw amber"></i>Mark copy</button>
+                  <button type="button" role="radio" data-pick="dst" aria-checked="false"><i class="sw cyan"></i>Mark twin</button>
+                </div>
+                <div class="pick-transport">
+                  <button type="button" class="pick-play" id="pickPlay" aria-label="Play from the cursor"><svg viewBox="0 0 16 16" aria-hidden="true" id="pickIcon"><path d="M4 2.5v11l9-5.5z" fill="currentColor"/></svg></button>
+                  <button type="button" class="btn ghost small" id="pickPlaySrc" disabled>Play copy</button>
+                  <button type="button" class="btn ghost small" id="pickPlayDst" disabled>Play twin</button>
+                  <span class="pick-time" id="pickTime">0:00.0</span>
+                </div>
+              </div>
+              <div class="pick-wrap" id="pickWrap" tabindex="0" role="application" aria-label="Song overview. In Listen mode click to play from a point; in Mark modes drag to mark a section.">
+                <canvas id="pickCanvas"></canvas>
+                <span class="pick-hover" id="pickHover" hidden></span>
+              </div>
+              <p class="pick-help" id="pickHelp">Click anywhere to listen from there.</p>
+            </div>
+            <form class="probe-form" id="probeForm">
+              <label class="field"><span>Copy starts at</span><input id="probeSrc" inputmode="decimal" placeholder="0:20.3" required></label>
+              <label class="field"><span>Twin starts at</span><input id="probeDst" inputmode="decimal" placeholder="1:29.5" required></label>
+              <label class="field small"><span>Length (s)</span><input id="probeLen" inputmode="decimal" value="15"></label>
+              <label class="field small"><span>Search ± (s)</span><input id="probeSearch" inputmode="decimal" value="1"></label>
+              <button class="btn primary" id="probeBtn" type="submit">Check</button>
+            </form>
+            <div class="probe-out" id="probeOut" hidden></div>
+          </div>
+          <div class="debug-block">
+            <h3>Hidden results <span class="aside" id="hiddenCount"></span></h3>
+            <p class="debug-hint">Pairs that cancelled somewhere but were filtered, merged as duplicates or cut by the result limit. Add one to listen to it.</p>
+            <ol class="hidden-list" id="hiddenList"></ol>
+          </div>
+        </div>
+      </details>
+    </div>
+  </main>
+
+  <footer>
+    <p>Everything runs in this tab. Nothing is uploaded.</p>
+  </footer>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="engine.js"></script>
+  <script src="decode.js"></script>
+  <script src="export.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

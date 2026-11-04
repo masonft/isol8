@@ -1,0 +1,754 @@
+/*
+ * isol8 engine — finds sample-identical "twin" sections in a song and isolates
+ * what differs between them by phase cancellation:  result[t] = x[t] - x[t - lag].
+ *
+ * Pure JavaScript, no dependencies. Runs in a Web Worker, on the main thread, or
+ * in Node (for tests).
+ *
+ * Audio is passed as an array of Float32Array channels at the file's NATIVE
+ * sample rate. Nothing here resamples: a resampled copy would turn the integer
+ * offset between twins into a fractional one and ruin the cancellation.
+ */
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === "object" && module.exports) module.exports = api;
+  else root.Isol8Engine = api;
+})(typeof self !== "undefined" ? self : this, function () {
+  "use strict";
+
+  // ------------------------------------------------------------------ FFT
+  // Iterative radix-2 complex FFT on split re/im Float64Arrays, plus a real FFT
+  // built on a half-size complex FFT.
+  const fftCache = new Map();
+
+  function ComplexFFT(n) {
+    if (n & (n - 1)) throw new Error("FFT size must be a power of two");
+    this.n = n;
+    const rev = new Uint32Array(n);
+    let bits = 0;
+    while ((1 << bits) < n) bits++;
+    for (let i = 0; i < n; i++) {
+      let r = 0;
+      for (let b = 0; b < bits; b++) r |= ((i >> b) & 1) << (bits - 1 - b);
+      rev[i] = r;
+    }
+    this.rev = rev;
+    const half = n >> 1;
+    this.cos = new Float64Array(half);
+    this.sin = new Float64Array(half);
+    for (let i = 0; i < half; i++) {
+      this.cos[i] = Math.cos((2 * Math.PI * i) / n);
+      this.sin[i] = Math.sin((2 * Math.PI * i) / n);
+    }
+  }
+  // inverse=false: X[k] = sum x[t] e^{-2 pi i k t / n}; inverse=true: unnormalised e^{+...}
+  ComplexFFT.prototype.transform = function (re, im, inverse) {
+    const n = this.n, rev = this.rev, cs = this.cos, sn = this.sin;
+    for (let i = 0; i < n; i++) {
+      const j = rev[i];
+      if (j > i) {
+        let t = re[i]; re[i] = re[j]; re[j] = t;
+        t = im[i]; im[i] = im[j]; im[j] = t;
+      }
+    }
+    const sgn = inverse ? 1 : -1;
+    for (let a = 0; a < n; a += 2) { // size-2 stage, no twiddles
+      const b = a + 1, xr = re[b], xi = im[b];
+      re[b] = re[a] - xr; im[b] = im[a] - xi; re[a] += xr; im[a] += xi;
+    }
+    if (n <= 16384) {
+      // small (cache-resident) sizes: twiddle-outer order, each twiddle loaded once per stage
+      for (let size = 4; size <= n; size <<= 1) {
+        const halfSize = size >> 1, step = n / size;
+        for (let k = 0; k < halfSize; k++) {
+          const wr = cs[k * step], wi = sgn * sn[k * step];
+          for (let a = k; a < n; a += size) {
+            const b = a + halfSize;
+            const xr = re[b] * wr - im[b] * wi, xi = re[b] * wi + im[b] * wr;
+            re[b] = re[a] - xr; im[b] = im[a] - xi; re[a] += xr; im[a] += xi;
+          }
+        }
+      }
+      return;
+    }
+    // large sizes: block-outer order keeps memory access sequential
+    for (let size = 4; size <= n; size <<= 1) {
+      const halfSize = size >> 1, step = n / size;
+      for (let start = 0; start < n; start += size) {
+        for (let k = 0, ti = 0; k < halfSize; k++, ti += step) {
+          const wr = cs[ti], wi = sgn * sn[ti];
+          const a = start + k, b = a + halfSize;
+          const xr = re[b] * wr - im[b] * wi;
+          const xi = re[b] * wi + im[b] * wr;
+          re[b] = re[a] - xr; im[b] = im[a] - xi;
+          re[a] += xr; im[a] += xi;
+        }
+      }
+    }
+  };
+
+  function RealFFT(n) {
+    this.n = n;
+    this.h = n >> 1;
+    this.c = new ComplexFFT(this.h);
+    this.zr = new Float64Array(this.h);
+    this.zi = new Float64Array(this.h);
+    this.wr = new Float64Array(this.h + 1);
+    this.wi = new Float64Array(this.h + 1);
+    for (let k = 0; k <= this.h; k++) {
+      this.wr[k] = Math.cos((2 * Math.PI * k) / n);
+      this.wi[k] = -Math.sin((2 * Math.PI * k) / n);
+    }
+  }
+  function rfftFor(n) {
+    let f = fftCache.get(n);
+    if (!f) { f = new RealFFT(n); fftCache.set(n, f); }
+    return f;
+  }
+  /** Forward real FFT of x (length <= n, zero padded) -> outRe/outIm length n/2+1. */
+  RealFFT.prototype.forward = function (x, outRe, outIm, offset, length) {
+    const h = this.h, zr = this.zr, zi = this.zi;
+    offset = offset || 0;
+    const len = length === undefined ? x.length - offset : length;
+    for (let k = 0; k < h; k++) {
+      const i0 = 2 * k, i1 = i0 + 1;
+      zr[k] = i0 < len ? x[offset + i0] : 0;
+      zi[k] = i1 < len ? x[offset + i1] : 0;
+    }
+    this.c.transform(zr, zi, false);
+    for (let k = 0; k <= h; k++) {
+      const k1 = k % h, k2 = (h - k) % h;
+      const ar = zr[k1], ai = zi[k1], br = zr[k2], bi = -zi[k2]; // Z[k], conj(Z[h-k])
+      const er = 0.5 * (ar + br), ei = 0.5 * (ai + bi);           // even part
+      const or_ = 0.5 * (ai - bi), oi = -0.5 * (ar - br);         // odd part: (Z - conj)/(2i)
+      const wr = this.wr[k], wi = this.wi[k];
+      outRe[k] = er + wr * or_ - wi * oi;
+      outIm[k] = ei + wr * oi + wi * or_;
+    }
+  };
+  /** Inverse real FFT (normalised) of half spectrum -> out (length n). */
+  RealFFT.prototype.inverse = function (inRe, inIm, out) {
+    const h = this.h, zr = this.zr, zi = this.zi, n = this.n;
+    for (let k = 0; k < h; k++) {
+      const ar = inRe[k], ai = inIm[k], br = inRe[h - k], bi = -inIm[h - k]; // X[k], conj(X[h-k])
+      const er = 0.5 * (ar + br), ei = 0.5 * (ai + bi);
+      const dr = 0.5 * (ar - br), di = 0.5 * (ai - bi);
+      const wr = this.wr[k], wi = -this.wi[k];                   // e^{+2 pi i k/n}
+      const or_ = dr * wr - di * wi, oi = dr * wi + di * wr;
+      zr[k] = er - oi; zi[k] = ei + or_;                          // Fe + i*Fo
+    }
+    this.c.transform(zr, zi, true);
+    const s = 1 / h;
+    for (let k = 0; k < h; k++) { out[2 * k] = zr[k] * s; out[2 * k + 1] = zi[k] * s; }
+    return out;
+  };
+
+  const hannCache = new Map();
+  function hann(n) { // periodic Hann (scipy get_window('hann', n))
+    let w = hannCache.get(n);
+    if (!w) {
+      w = new Float64Array(n);
+      for (let i = 0; i < n; i++) w[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / n);
+      hannCache.set(n, w);
+    }
+    return w;
+  }
+
+  // ------------------------------------------------------------- helpers
+  function nextPow2(v) { let n = 1; while (n < v) n <<= 1; return n; }
+
+  /** scipy.ndimage.uniform_filter1d(x, size) with mode='reflect'. */
+  function uniformFilter1d(x, size) {
+    const n = x.length, out = new Float64Array(n);
+    if (size <= 1) { out.set(x); return out; }
+    const left = size >> 1;
+    const at = (i) => {
+      // 'reflect' (d c b a | a b c d | d c b a)
+      while (i < 0 || i >= n) i = i < 0 ? -i - 1 : 2 * n - i - 1;
+      return x[i];
+    };
+    let acc = 0;
+    for (let j = 0; j < size; j++) acc += at(j - left);
+    out[0] = acc / size;
+    for (let i = 1; i < n; i++) {
+      acc += at(i - left + size - 1) - at(i - left - 1);
+      out[i] = acc / size;
+    }
+    return out;
+  }
+
+  /** Fill False gaps shorter than `gap` that lie between True runs; returns [start,end) runs. */
+  function runsWithGapFill(on, gap) {
+    const runs = [];
+    let i = 0;
+    const n = on.length;
+    while (i < n) {
+      if (!on[i]) { i++; continue; }
+      let j = i;
+      while (j < n && on[j]) j++;
+      runs.push([i, j]);
+      i = j;
+    }
+    const merged = [];
+    for (const r of runs) {
+      const last = merged[merged.length - 1];
+      if (last && r[0] - last[1] < gap) last[1] = r[1];
+      else merged.push([r[0], r[1]]);
+    }
+    return merged;
+  }
+
+  function mono(channels) {
+    const n = channels[0].length, c = channels.length, m = new Float32Array(n);
+    for (const ch of channels) for (let i = 0; i < n; i++) m[i] += ch[i];
+    if (c > 1) for (let i = 0; i < n; i++) m[i] /= c;
+    return m;
+  }
+
+  /** Level of a section minus level of its isolation, dB (both twins averaged). */
+  function cancelDb(channels, lag, a, b) {
+    let e1 = 0, e2 = 0, er = 0;
+    for (const ch of channels) {
+      for (let i = a; i < b; i++) {
+        const s1 = ch[i], s2 = ch[i - lag], r = s1 - s2;
+        e1 += s1 * s1; e2 += s2 * s2; er += r * r;
+      }
+    }
+    return 10 * Math.log10((e1 + e2) / 2 / (er + 1e-20));
+  }
+
+  function hopFor(sr) { return Math.pow(2, Math.round(Math.log2(sr * 0.0464))); }
+
+  // ------------------------------------------------------ coarse search
+  function coarseFeatures(m, sr) {
+    const hop = hopFor(sr), nper = 2 * hop;
+    const nFrames = m.length >= nper ? 1 + Math.floor((m.length - nper) / hop) : 0;
+    const maxBin = Math.floor(11000 / (sr / nper));
+    // band edges: np.unique(np.geomspace(2, maxBin, 129).astype(int))
+    const raw = [];
+    for (let i = 0; i <= 128; i++) {
+      const v = i === 128 ? maxBin : 2 * Math.pow(maxBin / 2, i / 128);
+      raw.push(Math.floor(v + 1e-9));
+    }
+    const edges = [...new Set(raw)];
+    const D = edges.length - 1;
+    const F = new Float32Array(nFrames * D);
+    const fft = rfftFor(nper), w = hann(nper), scale = 1 / (nper / 2);
+    const buf = new Float64Array(nper), re = new Float64Array(nper / 2 + 1), im = new Float64Array(nper / 2 + 1);
+    const mag = new Float64Array(maxBin);
+    for (let f = 0; f < nFrames; f++) {
+      const off = f * hop;
+      for (let i = 0; i < nper; i++) buf[i] = m[off + i] * w[i];
+      fft.forward(buf, re, im);
+      for (let k = 0; k < maxBin; k++) mag[k] = Math.hypot(re[k], im[k]) * scale;
+      let mean = 0;
+      const row = f * D;
+      for (let d = 0; d < D; d++) {
+        let s = 0;
+        for (let k = edges[d]; k < edges[d + 1]; k++) s += mag[k];
+        const v = Math.log1p(100 * s);
+        F[row + d] = v; mean += v;
+      }
+      mean /= D;
+      let norm = 0;
+      for (let d = 0; d < D; d++) { F[row + d] -= mean; norm += F[row + d] * F[row + d]; }
+      norm = Math.sqrt(norm) + 1e-9;
+      for (let d = 0; d < D; d++) F[row + d] /= norm;
+    }
+    return { F, D, n: nFrames, hop };
+  }
+
+  /** Raw coarse candidates for lags in [lagFrom, lagTo) (frames). Separate so it can be split across workers. */
+  function coarseScan(feat, sr, opt, lagFrom, lagTo, progress) {
+    const { F, D, n, hop } = feat;
+    const fps = sr / hop;
+    const minLag = Math.floor(opt.minLagS * fps), minLen = Math.floor(opt.minLenS * fps);
+    const win = Math.max(1, Math.floor(opt.smoothS * fps));
+    lagFrom = Math.max(lagFrom === undefined ? 0 : lagFrom, minLag);
+    lagTo = Math.min(lagTo === undefined ? n : lagTo, n - minLen);
+    const cands = [];
+    const d4 = [new Float64Array(n), new Float64Array(n), new Float64Array(n), new Float64Array(n)];
+    const on = new Uint8Array(n);
+    const total = Math.max(1, lagTo - lagFrom);
+    for (let lag0 = lagFrom; lag0 < lagTo; lag0 += 4) {
+      const nl = Math.min(4, lagTo - lag0);
+      const len0 = n - lag0;
+      // 4 diagonals at once: row t is shared by the four products
+      for (let t = 0; t < len0; t++) {
+        const a = t * D, b = (t + lag0) * D;
+        let s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+        const avail = Math.min(nl, n - t - lag0);
+        if (avail === 4) {
+          for (let k = 0; k < D; k++) {
+            const f = F[a + k];
+            s0 += f * F[b + k]; s1 += f * F[b + D + k]; s2 += f * F[b + 2 * D + k]; s3 += f * F[b + 3 * D + k];
+          }
+        } else {
+          for (let k = 0; k < D; k++) {
+            const f = F[a + k];
+            s0 += f * F[b + k];
+            if (avail > 1) s1 += f * F[b + D + k];
+            if (avail > 2) s2 += f * F[b + 2 * D + k];
+          }
+        }
+        d4[0][t] = s0; d4[1][t] = s1; d4[2][t] = s2; d4[3][t] = s3;
+      }
+      for (let j = 0; j < nl; j++) {
+        const lag = lag0 + j, len = n - lag;
+        const sm = uniformFilter1d(d4[j].subarray(0, len), win);
+        let any = false;
+        for (let t = 0; t < len; t++) { const v = sm[t] > opt.simThr; on[t] = v ? 1 : 0; if (v) any = true; }
+        if (!any) continue;
+        for (const [t0, t1] of runsWithGapFill(on.subarray(0, len), win)) {
+          if (t1 - t0 < minLen) continue;
+          let s = 0;
+          for (let t = t0; t < t1; t++) s += sm[t];
+          const mean = s / (t1 - t0);
+          cands.push({ score: mean * (t1 - t0), lag, t0, t1, sim: mean });
+        }
+      }
+      if (progress && ((lag0 - lagFrom) & 63) === 0) progress((lag0 - lagFrom) / total);
+    }
+    return cands;
+  }
+
+  /** Non-maximum suppression over raw candidates -> candidate list in samples. */
+  function selectCandidates(raw, hop, opt) {
+    const cands = raw.slice().sort((p, q) => q.score - p.score || p.lag - q.lag || p.t0 - q.t0);
+    const kept = [];
+    for (const c of cands) {
+      let dup = false;
+      for (const k of kept) {
+        if (Math.abs(k.lag - c.lag) <= 3) {
+          const ov = Math.min(c.t1, k.t1) - Math.max(c.t0, k.t0);
+          if (ov > 0.5 * Math.min(c.t1 - c.t0, k.t1 - k.t0)) { dup = true; break; }
+        }
+      }
+      if (!dup) kept.push(c);
+      if (kept.length >= opt.maxCandidates) break;
+    }
+    return kept.map((c) => ({ lag: c.lag * hop, a: (c.t0 + c.lag) * hop, b: (c.t1 + c.lag) * hop, sim: c.sim }));
+  }
+
+  // ------------------------------------------------- sample-exact lag
+  /** Candidate lags from PHAT-whitened and plain cross-correlation of m[a:b] vs m[a-L:b-L]. */
+  function xcorrLagPeaks(m, a, b, lagGuess, search, nPeaks) {
+    let lo = a - lagGuess - search;
+    if (lo < 0) { a -= lo; lo = 0; }
+    const segLen = b - a, refLen = b - lagGuess + search - lo;
+    const N = nextPow2(segLen + refLen);
+    const fft = rfftFor(N), H = N / 2 + 1;
+    const sr_ = new Float64Array(H), si = new Float64Array(H), rr = new Float64Array(H), ri = new Float64Array(H);
+    fft.forward(m, sr_, si, a, segLen);
+    fft.forward(m, rr, ri, lo, refLen);
+    const gr = new Float64Array(H), gi = new Float64Array(H), pr = new Float64Array(H), pi = new Float64Array(H);
+    for (let k = 0; k < H; k++) { // seg * conj(ref)
+      const r = sr_[k] * rr[k] + si[k] * ri[k];
+      const i = si[k] * rr[k] - sr_[k] * ri[k];
+      gr[k] = r; gi[k] = i;
+      const mag = Math.hypot(r, i) + 1e-12;
+      pr[k] = r / mag; pi[k] = i / mag;
+    }
+    const out = [];
+    const cc = new Float64Array(N);
+    for (const [R, I] of [[pr, pi], [gr, gi]]) {
+      fft.inverse(R, I, cc);
+      const vals = new Float64Array(2 * search + 1);
+      for (let k = 0; k <= 2 * search; k++) vals[k] = cc[((-k % N) + N) % N];
+      const order = Array.from(vals.keys()).sort((x, y) => vals[y] - vals[x]);
+      const picked = [];
+      for (const k of order) {
+        if (picked.every((p) => Math.abs(k - p) > 8)) picked.push(k);
+        if (picked.length >= nPeaks) break;
+      }
+      for (const k of picked) out.push(lagGuess + search - k);
+    }
+    return [...new Set(out)];
+  }
+
+  function refineLag(ch, m, sr, lagGuess, a, b, hop, opt) {
+    const search = 2 * hop;
+    // correlation on a short central chunk, scoring on a longer one
+    const mid = (a + b) >> 1;
+    // correlation chunk sized so seg + ref fit one FFT of xcorrFftSize
+    const xc = Math.floor(Math.min(opt.xcorrChunkS * sr, (opt.xcorrFftSize - 2 * search - 16) / 2) / 2);
+    const sc = Math.floor(opt.scoreChunkS * sr / 2);
+    const xa = Math.max(a, mid - xc), xb = Math.min(b, mid + xc);
+    const shortlist = xcorrLagPeaks(m, xa, xb, lagGuess, search, 5);
+    let sa = Math.max(a, mid - sc, lagGuess + search + 8);
+    const sb = Math.min(b, mid + sc);
+    const scores = new Map();
+    const score = (L) => { if (!scores.has(L)) scores.set(L, cancelDb(ch, L, sa, sb)); return scores.get(L); };
+    for (const L0 of shortlist) for (let L = L0 - 1; L <= L0 + 1; L++) score(L);
+    let best = null;
+    for (const [L, v] of scores) if (best === null || v > scores.get(best)) best = L;
+    // polish further around the winner
+    for (let L = best - 2; L <= best + 2; L++) score(L);
+    for (const [L, v] of scores) if (v > scores.get(best)) best = L;
+    const sharp = score(best) - 0.5 * (score(best - 1) + score(best + 1));
+    return { lag: best, sharpness: sharp };
+  }
+
+  // ---------------------------------------------------- region finding
+  const BANDS = [[0, 200], [200, 1000], [1000, 4000], [4000, 20000]];
+
+  /**
+   * Lazily computed per-frame cancellation profile for one lag, on a fixed frame grid
+   * (frame t starts at sample lag + t*hop). For each frame: energy fraction of TF bins
+   * cancelling by >= nullDb, plus per-band energy sums. Frames are computed once even
+   * when the analysis window grows.
+   */
+  function Profile(ch, sr, lag, nullDb) {
+    this.ch = ch; this.sr = sr; this.lag = lag;
+    this.nper = sr <= 48000 ? 2048 : 4096; this.hop = this.nper; // ~46 ms, non-overlapping
+    const n = ch[0].length;
+    this.T = n - lag >= this.nper ? 1 + Math.floor((n - lag - this.nper) / this.hop) : 0;
+    this.frac = new Float64Array(this.T);
+    this.bandP = new Float64Array(this.T * 4); this.bandD = new Float64Array(this.T * 4);
+    this.done = new Uint8Array(this.T);
+    this.thr = Math.pow(10, -nullDb / 10);
+    const H = this.nper / 2 + 1;
+    this.bandOf = new Uint8Array(H);
+    for (let k = 0; k < H; k++) {
+      const f = (k * sr) / this.nper;
+      let bi = 3;
+      for (let j = 0; j < 4; j++) if (f >= BANDS[j][0] && f < BANDS[j][1]) { bi = j; break; }
+      this.bandOf[k] = bi;
+    }
+    this.b1 = new Float64Array(this.nper); this.b2 = new Float64Array(this.nper);
+    this.r1 = new Float64Array(H); this.i1 = new Float64Array(H); this.r2 = new Float64Array(H); this.i2 = new Float64Array(H);
+  }
+  Profile.prototype.frameOf = function (sample) { return Math.floor((sample - this.lag) / this.hop); };
+  Profile.prototype.startOf = function (t) { return this.lag + t * this.hop; };
+  Profile.prototype.compute = function (t0, t1) {
+    t0 = Math.max(0, t0); t1 = Math.min(this.T, t1);
+    const { nper, hop, lag, thr, bandOf, b1, b2, r1, i1, r2, i2 } = this;
+    const fft = rfftFor(nper), w = hann(nper), H = nper / 2 + 1, sc2 = Math.pow(1 / (nper / 2), 2);
+    for (let t = t0; t < t1; t++) {
+      if (this.done[t]) continue;
+      const off = lag + t * hop;
+      let wsum = 0, dsum = 0;
+      for (const c of this.ch) {
+        for (let i = 0; i < nper; i++) { b1[i] = c[off + i] * w[i]; b2[i] = c[off - lag + i] * w[i]; }
+        fft.forward(b1, r1, i1);
+        fft.forward(b2, r2, i2);
+        for (let k = 0; k < H; k++) {
+          const P = (r1[k] * r1[k] + i1[k] * i1[k] + r2[k] * r2[k] + i2[k] * i2[k]) * 0.5 * sc2;
+          const dr = r1[k] - r2[k], di = i1[k] - i2[k];
+          wsum += P;
+          this.bandP[t * 4 + bandOf[k]] += P;
+          if ((dr * dr + di * di) * sc2 < P * thr) { dsum += P; this.bandD[t * 4 + bandOf[k]] += P; }
+        }
+      }
+      this.frac[t] = wsum < 1e-7 ? 0 : dsum / (wsum + 1e-12);
+      this.done[t] = 1;
+    }
+  };
+
+  function findRegions(ch, sr, lag, a, b, opt, shared) {
+    // analyse a small margin first; grow the window while a region touches its edge
+    const prof = shared || new Profile(ch, sr, lag, opt.nullDb);
+    const n = ch[0].length, step = Math.floor(opt.extendStepS * sr);
+    let lo = Math.max(lag, a - step), hi = Math.min(n, b + step);
+    let regs;
+    for (let iter = 0; iter < 200; iter++) {
+      regs = regionsIn(prof, lo, hi, opt);
+      const edge = Math.floor(0.5 * sr);
+      const growLo = lo > lag && regs.some((r) => r.s - lo < edge);
+      const growHi = hi < n && regs.some((r) => hi - r.e < edge);
+      if (!growLo && !growHi) break;
+      if (growLo) lo = Math.max(lag, lo - step);
+      if (growHi) hi = Math.min(n, hi + step);
+    }
+    return regs;
+  }
+
+  /** Zones (dst samples) where the coarse spectra at this lag look alike anywhere in the song. */
+  function similarZones(feat, sr, lag, opt) {
+    const { F, D, n, hop } = feat;
+    const L = Math.round(lag / hop), len = n - L;
+    if (len <= 0) return [];
+    const d = new Float64Array(len);
+    for (let t = 0; t < len; t++) {
+      const a = t * D, b = (t + L) * D;
+      let s = 0;
+      for (let k = 0; k < D; k++) s += F[a + k] * F[b + k];
+      d[t] = s;
+    }
+    const sm = uniformFilter1d(d, Math.max(1, Math.floor(sr / hop)));
+    const on = new Uint8Array(len);
+    for (let t = 0; t < len; t++) on[t] = sm[t] > opt.zoneThr ? 1 : 0;
+    return runsWithGapFill(on, Math.floor(sr / hop))
+      .filter(([t0, t1]) => (t1 - t0) * hop >= opt.minZoneS * sr)
+      .map(([t0, t1]) => [(t0 + L) * hop, (t1 + L) * hop]);
+  }
+
+  /** Every region where the copy at `lag` cancels: the candidate's own zone plus any other
+   *  zone the coarse spectra flag, sharing one lazily computed profile. */
+  function regionsForLag(ch, sr, lag, a, b, opt, feat) {
+    const prof = new Profile(ch, sr, lag, opt.nullDb);
+    const zones = [[a, b]];
+    if (feat) for (const z of similarZones(feat, sr, lag, opt)) zones.push(z);
+    const out = [];
+    for (const [za, zb] of zones) {
+      if (out.some((r) => za >= r.s && zb <= r.e)) continue;     // already covered
+      for (const r of findRegions(ch, sr, lag, za, zb, opt, prof)) {
+        if (!out.some((q) => Math.min(q.e, r.e) > Math.max(q.s, r.s))) out.push(r);
+      }
+    }
+    return out;
+  }
+
+  function regionsIn(p, a, b, opt) {
+    const f0 = Math.max(0, Math.ceil((a - p.lag) / p.hop)), f1 = Math.min(p.T, p.frameOf(b - p.nper) + 1);
+    if (f1 - f0 <= 0) return [];
+    p.compute(f0, f1);
+    const T = f1 - f0, frac = p.frac.subarray(f0, f1);
+    const fps = p.sr / p.hop;
+    const sm = uniformFilter1d(frac, Math.max(1, Math.floor(opt.regionSmoothS * fps)));
+    const on = new Uint8Array(T);
+    for (let t = 0; t < T; t++) on[t] = sm[t] > opt.fracThr ? 1 : 0;
+    const regs = [];
+    for (let [t0, t1] of runsWithGapFill(on, Math.max(1, Math.floor(opt.gapS * fps)))) {
+      if ((t1 - t0) / fps < opt.minRegionS) continue;
+      let g0 = -1, g1 = -1; // tighten to raw profile
+      for (let t = t0; t < t1; t++) if (frac[t] > opt.fracThr) { if (g0 < 0) g0 = t; g1 = t; }
+      if (g0 >= 0) { t0 = g0; t1 = g1 + 1; }
+      const s = p.startOf(f0 + t0);
+      const e = Math.min(p.startOf(f0 + Math.min(t1, T - 1)) + p.hop, b);
+      let fm = 0;
+      const bp = [0, 0, 0, 0], bd = [0, 0, 0, 0];
+      for (let t = t0; t < t1; t++) {
+        fm += frac[t];
+        const g = (f0 + t) * 4;
+        for (let j = 0; j < 4; j++) { bp[j] += p.bandP[g + j]; bd[j] += p.bandD[g + j]; }
+      }
+      regs.push({ s, e, deep: fm / (t1 - t0), bands: bp.map((v, j) => (v > 0 ? bd[j] / v : 0)) });
+    }
+    return regs;
+  }
+
+  // ------------------------------------------------------ pairs & dedup
+  function makePair(ch, sr, lag, reg, extra) {
+    const p = {
+      lag, sr,
+      dstStart: reg.s, dstEnd: reg.e,
+      srcStart: reg.s - lag, srcEnd: reg.e - lag,
+      cancelDb: cancelDb(ch, lag, reg.s, reg.e),
+      deep: reg.deep,
+      bands: reg.bands,
+      sharpness: extra.sharpness,
+      coarseSim: extra.sim,
+      merged: 0,
+    };
+    return scorePair(p);
+  }
+  function scorePair(p) {
+    p.breadth = p.bands.length ? p.bands.reduce((s, v) => s + v, 0) / p.bands.length : p.deep;
+    p.lengthS = (p.dstEnd - p.dstStart) / p.sr;
+    p.score = p.breadth * Math.sqrt(p.lengthS) * Math.sqrt(Math.max(p.cancelDb, 0.1));
+    return p;
+  }
+  function overlap(a0, a1, b0, b1) { return Math.max(0, Math.min(a1, b1) - Math.max(a0, b0)); }
+
+  /** How different two results sound over their common span: 10log10(E(a) / E(a - b)). */
+  function isolationSdr(ch, p, q) {
+    const s = Math.max(p.dstStart, q.dstStart), e = Math.min(p.dstEnd, q.dstEnd);
+    if (e <= s) return -Infinity;
+    let ea = 0, ed = 0;
+    for (const c of ch) {
+      for (let t = s; t < e; t++) {
+        const a = c[t] - c[t - p.lag], d = c[t - q.lag] - c[t - p.lag]; // (a - b) = x[t-Lq] - x[t-Lp]
+        ea += a * a; ed += d * d;
+      }
+    }
+    return 10 * Math.log10((ea + 1e-20) / (ed + 1e-20));
+  }
+
+  /**
+   * Duplicate prevention. A result is a duplicate when it would sound the same as one
+   * already listed:
+   *  1. same offset (within sameLagSamples) and destination regions overlapping or
+   *     touching (< sameGapS apart): merged into one result covering both;
+   *  2. different offset but practically identical audio over most of the shorter
+   *     result (difference >= identicalSdrDb below the result, e.g. a chorus pasted
+   *     three times gives A->C and B->C with the same isolation): dropped.
+   * Results that merely overlap in time but sound different are kept.
+   */
+  const byScore = (p, q) => q.score - p.score || p.lag - q.lag || p.dstStart - q.dstStart || p.dstEnd - q.dstEnd;
+  function dedupe(ch, sr, pairs, opt, stats) {
+    pairs.sort(byScore);
+    const merged = [];
+    for (const p of pairs) {
+      const gap = opt.sameGapS * sr;
+      const q = merged.find((q) => Math.abs(q.lag - p.lag) <= opt.sameLagSamples &&
+        Math.min(p.dstEnd, q.dstEnd) - Math.max(p.dstStart, q.dstStart) > -gap);
+      if (q) {
+        q.merged += 1;
+        const s = Math.min(q.dstStart, p.dstStart), e = Math.max(q.dstEnd, p.dstEnd);
+        if (s !== q.dstStart || e !== q.dstEnd) {
+          const wq = q.dstEnd - q.dstStart, wp = p.dstEnd - p.dstStart;
+          q.deep = (q.deep * wq + p.deep * wp) / (wq + wp);
+          q.bands = q.bands.map((v, j) => (v * wq + p.bands[j] * wp) / (wq + wp));
+          q.dstStart = s; q.dstEnd = e; q.srcStart = s - q.lag; q.srcEnd = e - q.lag;
+          q.cancelDb = cancelDb(ch, q.lag, s, e);
+          scorePair(q);
+        }
+      } else merged.push(p);
+    }
+    merged.sort(byScore);
+    const out = [];
+    for (const p of merged) {
+      const twin = out.find((q) => {
+        const sh = Math.min(p.dstEnd - p.dstStart, q.dstEnd - q.dstStart);
+        return overlap(p.dstStart, p.dstEnd, q.dstStart, q.dstEnd) >= opt.identicalOverlap * sh &&
+               isolationSdr(ch, q, p) >= opt.identicalSdrDb;
+      });
+      if (twin) { twin.merged += 1 + p.merged; if (stats) stats.duplicates.push({ pair: p, of: twin }); }
+      else out.push(p);
+    }
+    return out;
+  }
+
+  const DEFAULTS = {
+    minLagS: 2, minLenS: 4, simThr: 0.8, smoothS: 2, maxCandidates: 40,
+    xcorrChunkS: 4, xcorrFftSize: 262144, scoreChunkS: 6,
+    nullDb: 15, fracThr: 0.3, regionSmoothS: 1, minRegionS: 3, gapS: 1.5,
+    minDeep: 0.3, sameLagSamples: 32, sameGapS: 1.0, identicalOverlap: 0.5, identicalSdrDb: 15, maxResults: 40,
+    extendStepS: 4, zoneThr: 0.7, minZoneS: 1.5,
+  };
+
+  function options(o) { return Object.assign({}, DEFAULTS, o || {}); }
+
+  /** Analysis context shared by all steps (one per worker). */
+  function prepare(channels, sr, o) {
+    const ctx = { ch: channels, sr, opt: options(o), m: mono(channels), n: channels[0].length };
+    ctx.feat = null;
+    return ctx;
+  }
+  function features(ctx) {
+    if (!ctx.feat) ctx.feat = coarseFeatures(ctx.m, ctx.sr);
+    return ctx.feat;
+  }
+  function lagRange(ctx) {
+    const f = features(ctx), fps = ctx.sr / f.hop;
+    return [Math.floor(ctx.opt.minLagS * fps), f.n - Math.floor(ctx.opt.minLenS * fps)];
+  }
+  /** Would candidate c only rediscover material an already-found pair explains? */
+  function explained(found, c, hop) {
+    return found.some((p) => Math.abs(p.lag - c.lag) <= 3 * hop && c.a >= p.dstStart - hop && c.b <= p.dstEnd + hop);
+  }
+  /** Sample-exact lag + cancelling regions for one coarse candidate. */
+  function analyseCandidate(ctx, c) {
+    const { ch, m, sr, opt } = ctx, hop = features(ctx).hop;
+    if (c.a - c.lag - 2 * hop - 8 < 0) {               // too close to the start for the search window
+      c = Object.assign({}, c, { a: c.lag + 2 * hop + 8 });
+      if (c.b - c.a < opt.minRegionS * sr) return [];
+    }
+    const r = refineLag(ch, m, sr, c.lag, c.a, c.b, hop, opt);
+    return regionsForLag(ch, sr, r.lag, c.a, c.b, opt, features(ctx))
+      .map((reg) => makePair(ch, sr, r.lag, reg, { sharpness: r.sharpness, sim: c.sim }));
+  }
+  /**
+   * Filter, de-duplicate and rank. With `stats`, also records what each stage dropped
+   * (for the app's debug view): rejected by the filters, merged as duplicates, cut by maxResults.
+   */
+  function finalize(ctx, found, stats) {
+    const { ch, sr, opt } = ctx;
+    const kept = [], rejected = [];
+    for (const p of found) (p.deep >= opt.minDeep && p.cancelDb > 0 ? kept : rejected).push(p);
+    if (stats) Object.assign(stats, { found: found.length, rejected, afterFilter: kept.length, duplicates: [] });
+    const all = dedupe(ch, sr, kept, opt, stats);
+    const res = all.slice(0, opt.maxResults);
+    if (stats) { stats.afterDedupe = all.length; stats.cut = all.slice(opt.maxResults); }
+    res.forEach((p, i) => { p.rank = i + 1; p.id = `${p.lag}:${p.dstStart}`; });
+    return res;
+  }
+
+  /**
+   * Debug probe for a pair the user knows about: aligns copy (at sample `src`) onto twin
+   * (at `dst`) for `len` samples, searching +-searchS seconds around the guess, and reports
+   * what each stage of the pipeline sees there.
+   */
+  function probePair(ctx, src, dst, len, searchS) {
+    const { ch, m, sr, opt, n } = ctx, f = features(ctx), hop = f.hop;
+    const guess = dst - src;
+    if (guess <= 0) throw new Error("The twin has to start after the copy.");
+    const search = Math.max(2 * hop, Math.round((searchS || 1) * sr));
+    const a = Math.max(dst, guess + search + 8), b = Math.min(n, dst + len);
+    if (b - a < 0.5 * sr) throw new Error("That span is too short, too close to the start, or runs past the end of the song.");
+    // wide search around the guess, scored by how deep each peak cancels
+    const BIG = 1 << 21, mid = (a + b) >> 1;
+    const xc = Math.floor(Math.min(opt.xcorrChunkS * sr, (BIG - 2 * search - 16) / 2) / 2);
+    const shortlist = xcorrLagPeaks(m, Math.max(a, mid - xc), Math.min(b, mid + xc), guess, search, 6);
+    const sc = Math.floor((opt.scoreChunkS * sr) / 2), sa = Math.max(a, mid - sc), sb = Math.min(b, mid + sc);
+    let coarse = guess, bestDb = -Infinity;
+    for (const L of shortlist) { if (sa - L < 0) continue; const v = cancelDb(ch, L, sa, sb); if (v > bestDb) { bestDb = v; coarse = L; } }
+    const r = refineLag(ch, m, sr, coarse, a, b, hop, opt);
+    const lag = r.lag;
+
+    // what the coarse scan sees along this diagonal (same smoothing and threshold)
+    const F = f.F, D = f.D, Lf = Math.round(lag / hop), win = Math.max(1, Math.floor((opt.smoothS * sr) / hop));
+    const t0 = Math.max(0, Math.floor(a / hop) - Lf), t1 = Math.max(t0, Math.min(f.n - Lf, Math.ceil(b / hop) - Lf));
+    const m0 = Math.max(0, t0 - win), m1 = Math.min(f.n - Lf, t1 + win);
+    const diag = new Float64Array(Math.max(0, m1 - m0));
+    for (let t = m0; t < m1; t++) { let v = 0; const x = t * D, y = (t + Lf) * D; for (let k = 0; k < D; k++) v += F[x + k] * F[y + k]; diag[t - m0] = v; }
+    const sm = uniformFilter1d(diag, win).subarray(t0 - m0, t1 - m0);
+    let sum = 0, max = -Infinity, run = 0, longest = 0;
+    for (const v of sm) { sum += v; if (v > max) max = v; run = v > opt.simThr ? run + 1 : 0; if (run > longest) longest = run; }
+    const sim = { mean: sm.length ? sum / sm.length : 0, max: sm.length ? max : 0, longestS: (longest * hop) / sr, thr: opt.simThr, hop, start: (t0 + Lf) * hop, values: Array.from(sm) };
+
+    // cancellation profile over the span
+    const prof = new Profile(ch, sr, lag, opt.nullDb);
+    const pa = Math.max(0, prof.frameOf(a)), pb = Math.max(pa, Math.min(prof.T, prof.frameOf(b)));
+    prof.compute(pa, pb);
+    const profile = { start: prof.startOf(pa), hop: prof.hop, frac: Array.from(prof.frac.subarray(pa, pb)) };
+    const regions = regionsForLag(ch, sr, lag, a, b, opt, null)
+      .map((reg) => makePair(ch, sr, lag, reg, { sharpness: r.sharpness, sim: sim.mean }));
+    return { guess, lag, sharpness: r.sharpness, a, b, sr, cancelDb: cancelDb(ch, lag, a, b), sim, profile, regions, opt };
+  }
+
+  /**
+   * Full automatic search on one thread (Node tests / fallback). The browser app runs
+   * the same steps spread over a worker pool.
+   */
+  function detectTwins(channels, sr, onProgress, o) {
+    const prog = onProgress || (() => {});
+    const t0 = Date.now();
+    const ctx = prepare(channels, sr, o);
+    prog("map", 0);
+    const f = features(ctx);
+    const [l0, l1] = lagRange(ctx);
+    const raw = coarseScan(f, sr, ctx.opt, l0, l1, (x) => prog("map", x));
+    const cands = selectCandidates(raw, f.hop, ctx.opt);
+    const found = [];
+    cands.forEach((c, i) => {
+      prog("lock", i / cands.length);
+      found.push(...analyseCandidate(ctx, c));   // every candidate: results must not depend on order
+    });
+    prog("dedupe", 0);
+    const res = finalize(ctx, found);
+    prog("done", 1);
+    res.elapsedMs = Date.now() - t0;
+    return res;
+  }
+
+  /** The manual technique: x[start:end] - x[start-lag:end-lag], per channel. */
+  function isolate(channels, lag, start, end) {
+    end = Math.min(end, channels[0].length);
+    start = Math.max(start, lag);
+    return channels.map((c) => {
+      const out = new Float32Array(end - start);
+      for (let i = start; i < end; i++) out[i - start] = c[i] - c[i - lag];
+      return out;
+    });
+  }
+
+  return {
+    detectTwins, isolate, cancelDb, mono, DEFAULTS, probePair,
+    // pipeline steps (worker pool)
+    prepare, features, lagRange, coarseScan, selectCandidates, analyseCandidate, explained, finalize,
+    // internals exposed for tests
+    RealFFT, rfftFor, uniformFilter1d, isolationSdr, _internal: { refineLag, findRegions, dedupe, xcorrLagPeaks },
+  };
+});
