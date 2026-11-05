@@ -40,11 +40,15 @@
   </header>
 
   <nav class="session" id="session" aria-label="Songs in this session" hidden>
-    <ul id="sessionList"></ul>
-    <button class="add-song ghosty" id="settingsBtn" type="button" aria-expanded="false" aria-controls="settings"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h7M12.5 4.5h1M2.5 11.5h1M6.5 11.5h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="11" cy="4.5" r="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="5" cy="11.5" r="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>Settings<span class="changed-dot" hidden></span></button>
-    <button class="add-song" id="addSong" type="button">
+    <div class="tabs" id="sessionTabs">
+      <button class="tabs-arrow prev" id="tabsPrev" type="button" aria-label="Scroll songs left" tabindex="-1" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5L5.5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <ul id="sessionList"></ul>
+      <button class="tabs-arrow next" id="tabsNext" type="button" aria-label="Scroll songs right" tabindex="-1" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5L10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    </div>
+    <button class="add-song ghosty" id="settingsBtn" type="button" title="Settings" aria-expanded="false" aria-controls="settings"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h7M12.5 4.5h1M2.5 11.5h1M6.5 11.5h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="11" cy="4.5" r="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="5" cy="11.5" r="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/></svg><span class="lbl">Settings</span><span class="changed-dot" hidden></span></button>
+    <button class="add-song" id="addSong" type="button" title="Add a song">
       <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-      Add a song
+      <span class="lbl">Add a song</span>
     </button>
   </nav>
 

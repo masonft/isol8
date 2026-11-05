@@ -113,15 +113,18 @@
   const track = () => state.tracks.find((t) => t.id === state.current);
   const result = () => track()?.results?.find((r) => r.id === state.selected);
 
+  let tabsShown = null;   // track id last scrolled into view
   function renderSession() {
     const nav = $("session"), ul = $("sessionList");
     nav.hidden = state.tracks.length === 0;
     ul.replaceChildren(...state.tracks.map((t) => {
       const li = document.createElement("li");
+      li.dataset.id = t.id;
       const b = document.createElement("button");
       b.type = "button";
       b.className = `chip ${t.status}`;
       b.setAttribute("aria-current", t.id === state.current ? "true" : "false");
+      b.title = baseName(t.name);
       const led = document.createElement("span"); led.className = "led";
       const name = document.createElement("span"); name.className = "name"; name.textContent = baseName(t.name);
       const st = document.createElement("span"); st.className = "state";
@@ -129,9 +132,112 @@
         : t.status === "error" ? (t.errorStage === "analyse" ? "Failed" : "Couldn't read") : t.status === "queued" ? "Waiting" : "Analysing";
       b.append(led, name, st);
       b.addEventListener("click", () => selectTrack(t.id));
-      li.append(b);
+      // middle-click closes, like a browser tab
+      b.addEventListener("auxclick", (e) => { if (e.button === 1) { e.preventDefault(); removeTrack(t.id); } });
+      const x = document.createElement("button");
+      x.type = "button"; x.className = "chip-close";
+      x.setAttribute("aria-label", `Remove ${baseName(t.name)}`); x.title = "Remove";
+      x.innerHTML = '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 1.5l7 7M8.5 1.5l-7 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+      x.addEventListener("click", (e) => { e.stopPropagation(); removeTrack(t.id, li); });
+      li.append(b, x);
       return li;
     }));
+    if (state.current !== tabsShown) {
+      tabsShown = state.current;
+      const cur = ul.querySelector('[aria-current="true"]');
+      if (cur) requestAnimationFrame(() => scrollTabIntoView(cur.parentElement));
+    }
+    updateTabArrows();
+  }
+
+  // ---------------------------------------------------- song tab scrolling
+  function scrollTabIntoView(li) {
+    const ul = $("sessionList"), pad = 44;
+    const l = li.offsetLeft - ul.offsetLeft, r = l + li.offsetWidth;
+    let to = null;
+    if (l < ul.scrollLeft + pad) to = l - pad;
+    else if (r > ul.scrollLeft + ul.clientWidth - pad) to = r - ul.clientWidth + pad;
+    if (to !== null) ul.scrollTo({ left: Math.max(0, to), behavior: reduceMotion ? "auto" : "smooth" });
+  }
+  function updateTabArrows() {
+    const ul = $("sessionList"), tabs = $("sessionTabs");
+    const max = ul.scrollWidth - ul.clientWidth;
+    const canL = max > 4 && ul.scrollLeft > 4, canR = max > 4 && ul.scrollLeft < max - 4;
+    tabs.classList.toggle("can-l", canL); tabs.classList.toggle("can-r", canR);
+    $("tabsPrev").hidden = !canL; $("tabsNext").hidden = !canR;
+  }
+  function bindTabScroller() {
+    const ul = $("sessionList");
+    const page = (dir) => ul.scrollBy({ left: dir * Math.max(120, ul.clientWidth * 0.7), behavior: reduceMotion ? "auto" : "smooth" });
+    $("tabsPrev").addEventListener("click", () => page(-1));
+    $("tabsNext").addEventListener("click", () => page(+1));
+    ul.addEventListener("scroll", updateTabArrows, { passive: true });
+    // a plain vertical wheel scrolls the strip sideways, but only while it can still move,
+    // so the page keeps scrolling once the strip hits either end
+    ul.addEventListener("wheel", (e) => {
+      if (e.ctrlKey || Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return;
+      const max = ul.scrollWidth - ul.clientWidth;
+      if (max <= 1) return;
+      const d = e.deltaMode === 1 ? e.deltaY * 32 : e.deltaMode === 2 ? e.deltaY * ul.clientWidth : e.deltaY;
+      if ((d < 0 && ul.scrollLeft <= 0) || (d > 0 && ul.scrollLeft >= max - 1)) return;
+      e.preventDefault();
+      ul.scrollLeft += d;
+    }, { passive: false });
+    // mouse drag to scroll (touch already pans natively)
+    let drag = null;
+    ul.addEventListener("pointerdown", (e) => {
+      if (e.pointerType !== "mouse" || e.button !== 0 || ul.scrollWidth <= ul.clientWidth) return;
+      drag = { x: e.clientX, left: ul.scrollLeft, moved: false, id: e.pointerId };
+    });
+    ul.addEventListener("pointermove", (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const dx = e.clientX - drag.x;
+      if (!drag.moved && Math.abs(dx) < 5) return;
+      if (!drag.moved) { drag.moved = true; ul.setPointerCapture(e.pointerId); }
+      ul.scrollLeft = drag.left - dx;
+    });
+    const end = () => {
+      if (!drag) return;
+      if (drag.moved) {
+        // swallow the click that ends a drag so it doesn't switch songs
+        ul.addEventListener("click", (e) => { e.stopPropagation(); e.preventDefault(); }, { capture: true, once: true });
+      }
+      drag = null;
+    };
+    ul.addEventListener("pointerup", end);
+    ul.addEventListener("pointercancel", end);
+    if (window.ResizeObserver) new ResizeObserver(updateTabArrows).observe(ul);
+    window.addEventListener("resize", updateTabArrows);
+  }
+
+  function removeTrack(id, li) {
+    const i = state.tracks.findIndex((t) => t.id === id);
+    if (i < 0) return;
+    const t = state.tracks[i];
+    const finish = () => {
+      const j = state.tracks.indexOf(t);
+      if (j < 0) return;
+      t.removed = true;
+      state.tracks.splice(j, 1);
+      state.queue = state.queue.filter((q) => q.t !== t);
+      if (t.status === "busy" && state.abortAnalysis) state.abortAnalysis();
+      audioCache.delete(t.id);
+      probeCtx.delete(t.id);
+      if (state.current === t.id) {
+        stopPlayback(); pickStop();
+        pick.buf = null; pick.bufFor = null;
+        const next = state.tracks[j] || state.tracks[j - 1] || null;
+        state.current = next ? next.id : null;
+        state.selected = next && next.status === "done" && next.results.length ? next.results[0].id : null;
+        state.showAll = false;
+        mapCache = null;
+        renderAll();
+        if (next && next.status === "done") ensureAudio(next).then(() => { if (state.current === next.id) { mapCache = null; renderAll(); } });
+      } else {
+        renderAll();
+      }
+    };
+    if (li && !reduceMotion) { li.classList.add("leaving"); setTimeout(finish, 200); } else finish();
   }
 
   function selectTrack(id) {
@@ -192,7 +298,9 @@
       cacheAudio(t.id, dec.channels);
       if (!dec.rateKnown) toast("Couldn't read the sample rate from this file, so it was decoded at 44.1 kHz. If the song uses another rate, results may be weaker.", "warn");
       if (t.id === state.current) { mapCache = null; renderAll(); }
+      if (t.removed) throw Object.assign(new Error("Cancelled"), { cancelled: true });
       const results = await analyse(dec.channels, dec.sampleRate, (stage, frac) => setStage(t, stage, frac), t.opt);
+      if (t.removed) throw Object.assign(new Error("Cancelled"), { cancelled: true });
       t.results = results;
       t.debug = results.debug;
       t.probe = null;
@@ -205,6 +313,7 @@
         celebrate();
       }
     } catch (err) {
+      if (t.removed || err.cancelled) { audioCache.delete(t.id); state.busy = false; renderAll(); pump(); return; }
       console.error(err);
       t.status = "error";
       t.error = String(err && err.message || err);
@@ -297,6 +406,11 @@
       };
       w.onerror = (e) => { for (const p of pending.values()) p.reject(new Error(e.message || "Worker failed")); pending.clear(); };
     }
+    state.abortAnalysis = () => {
+      const err = new Error("Cancelled"); err.cancelled = true;
+      for (const p of pending.values()) p.reject(err);
+      pending.clear();
+    };
     try {
       onStage("Mapping repeats", 0.08);
       await Promise.all(workers.map((w, i) => new Promise((resolve, reject) => {
@@ -360,6 +474,7 @@
       onStage("Done", 1);
       return res;
     } finally {
+      state.abortAnalysis = null;
       workers.forEach((w) => w.terminate());
     }
   }
@@ -568,6 +683,33 @@
     return b;
   }
 
+  /**
+   * Get the shared AudioContext, waking it up. Call it synchronously from the click/tap
+   * handler (before any await): iOS Safari only lets audio start inside a user gesture.
+   */
+  function audioCtx() {
+    // iOS routes Web Audio as "ambient" sound by default, which the ring/silent switch mutes,
+    // so the app looks broken on most iPhones. "playback" plays like a music app does.
+    try { if (navigator.audioSession && navigator.audioSession.type !== "playback") navigator.audioSession.type = "playback"; } catch { /* unsupported */ }
+    if (!player.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      player.ctx = new AC();
+      // a phone call, Siri or another app's audio "interrupts" the context on iOS; reflect that in the UI
+      player.ctx.addEventListener("statechange", () => {
+        if (player.ctx.state === "running") return;
+        if (player.playing) pause();
+        if (pick.playing) pickStop();
+      });
+    }
+    // iOS also uses the non-standard "interrupted" state, which needs resume() just like "suspended"
+    if (player.ctx.state !== "running") {
+      const r = player.ctx.resume();
+      // iOS can leave the promise pending after an interruption; don't let that hang play()
+      return Promise.race([r, new Promise((res) => setTimeout(res, 400))]).then(() => player.ctx, () => player.ctx);
+    }
+    return Promise.resolve(player.ctx);
+  }
+
   let playSeq = 0;   // bumped by every start/stop, so an older play() that is still awaiting gives up
   async function play() {
     const p = result();
@@ -575,11 +717,7 @@
     pickStop();
     if (player.nodes) stopPlayback(true);
     const my = ++playSeq;
-    if (!player.ctx) {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      player.ctx = new AC();
-    }
-    if (player.ctx.state === "suspended") await player.ctx.resume();
+    await audioCtx();
     if (my !== playSeq) return;
     if (!player.iso) await prepareBuffers();
     if (my !== playSeq || !player.iso || result() !== p) return;
@@ -1590,8 +1728,8 @@
     stopPlayback(true);
     pickStop(true);
     const my = ++pick.seq;
-    if (!player.ctx) { const AC = window.AudioContext || window.webkitAudioContext; player.ctx = new AC(); }
-    if (player.ctx.state === "suspended") await player.ctx.resume();
+    await audioCtx();
+    if (my !== pick.seq || track() !== t) return;
     if (pick.bufFor !== t.id) {
       const ch = await ensureAudio(t);
       if (my !== pick.seq || track() !== t) return;
@@ -1779,6 +1917,7 @@
   function bind() {
     $("chooseFile").addEventListener("click", () => $("fileInput").click());
     $("addSong").addEventListener("click", () => $("fileInput").click());
+    bindTabScroller();
     $("fileInput").addEventListener("change", (e) => { addFiles([...e.target.files]); e.target.value = ""; wakeScope(); });
 
     const sc = $("scope");

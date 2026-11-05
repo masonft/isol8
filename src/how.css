@@ -91,5 +91,6 @@ input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border: 0; bo
   .limit-grid { grid-template-columns: minmax(0, 1fr); }
   .how-fig canvas { height: 200px; }
   .private-card { padding: 22px; }
-  .top-cta { padding: 8px 14px; }
 }
+/* the "Isolate" tab already links home, so the CTA goes first when space runs out */
+@media (max-width: 640px) { .top-cta { display: none; } }

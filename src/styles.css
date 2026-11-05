@@ -188,7 +188,7 @@ a { color: inherit; }
   opacity: var(--scrolled, 0); transition: opacity 0.3s;
 }
 @keyframes fade-down { from { opacity: 0; transform: translateY(-10px); } }
-.brand { display: flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; }
+.brand { display: flex; align-items: center; gap: 10px; flex: none; color: var(--text); text-decoration: none; }
 .logo { width: 40px; height: 26px; overflow: visible; }
 .logo path { stroke-dasharray: 80; stroke-dashoffset: 80; animation: draw 1.4s var(--ease-out) 0.15s forwards; }
 .logo .w2 { animation-delay: 0.3s; }
@@ -199,14 +199,14 @@ a { color: inherit; }
 .brand .wordmark { font-family: var(--display); font-size: 21px; font-weight: 700; letter-spacing: -0.03em; }
 .brand .tld { color: var(--tld); font-weight: 600; transition: color 0.3s; }
 .brand:hover .tld { color: var(--cyan); }
-.nav { display: flex; gap: 4px; padding: 4px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); }
+.nav { display: flex; flex: none; gap: 4px; padding: 4px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); }
 .nav a {
-  padding: 6px 14px; border-radius: 999px; font-size: 13.5px; color: var(--text-2); text-decoration: none;
+  padding: 6px 14px; border-radius: 999px; font-size: 13.5px; color: var(--text-2); text-decoration: none; white-space: nowrap;
   transition: color 0.2s, background 0.2s;
 }
 .nav a:hover { color: var(--text); }
 .nav a[aria-current="page"] { color: var(--text); background: var(--surface-3); box-shadow: inset 0 1px 0 var(--hl); }
-.header-tools { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.header-tools { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; }
 .icon-btn, .theme-toggle {
   position: relative; width: 38px; height: 38px; border-radius: 50%; flex: none;
   display: grid; place-items: center; cursor: pointer; color: var(--text-2);
@@ -223,6 +223,7 @@ a { color: inherit; }
 .gh-stars { display: inline-flex; align-items: center; gap: 4px; font: 500 12.5px var(--mono); color: var(--text-2); animation: pop 0.5s var(--ease-out); }
 .gh-stars svg { width: 12px; height: 12px; color: var(--amber); }
 .icon-btn.gh:hover .gh-stars { color: var(--text); }
+@media (max-width: 360px) { .icon-btn.gh.has-stars { width: 38px; padding: 0; } .icon-btn.gh .gh-stars { display: none; } }
 .icon-btn:hover > svg { transform: rotate(-8deg) scale(1.08); }
 .theme-toggle svg { position: absolute; width: 17px; height: 17px; transition: transform 0.5s var(--ease-spring), opacity 0.3s; }
 .theme-toggle .i-moon { opacity: 0; transform: rotate(-90deg) scale(0.5); }
@@ -232,19 +233,53 @@ a { color: inherit; }
 /* --------------------------------------------------------------- session */
 .session {
   max-width: var(--max); margin: 4px auto 14px; padding: 0 var(--gutter);
-  display: flex; align-items: center; gap: 8px; overflow-x: auto; scrollbar-width: none;
+  display: flex; align-items: center; gap: 8px;
 }
-.session ul { list-style: none; display: flex; gap: 8px; margin: 0; padding: 0; }
-.session li { animation: chip-in 0.5s var(--ease-spring) both; }
+/* the song strip scrolls on its own; Settings and Add stay put */
+.tabs { position: relative; flex: 0 1 auto; min-width: 0; display: flex; }
+.session ul {
+  list-style: none; display: flex; gap: 8px; margin: -6px 0; padding: 6px 2px; min-width: 0;
+  overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  --fl: 0px; --fr: 0px;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 var(--fl), #000 calc(100% - var(--fr)), transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 var(--fl), #000 calc(100% - var(--fr)), transparent);
+}
+.session ul::-webkit-scrollbar { display: none; }
+.tabs.can-l ul { --fl: 44px; }
+.tabs.can-r ul { --fr: 44px; }
+.session li { position: relative; flex: none; animation: chip-in 0.5s var(--ease-spring) both; }
+.session li.leaving { animation: chip-out 0.22s var(--ease-out) forwards; pointer-events: none; }
+@keyframes chip-out { to { opacity: 0; transform: scale(0.85); } }
+.tabs-arrow {
+  position: absolute; top: 50%; z-index: 2; width: 30px; height: 30px; margin-top: -15px; border-radius: 50%;
+  display: grid; place-items: center; cursor: pointer; color: var(--text-2);
+  background: var(--surface-3); border: 1px solid var(--line-2); box-shadow: 0 4px 14px var(--shadow);
+  transition: color 0.2s, transform 0.2s var(--ease-spring);
+}
+.tabs-arrow[hidden] { display: none; }
+.tabs-arrow:hover { color: var(--text); transform: scale(1.08); }
+.tabs-arrow svg { width: 14px; height: 14px; }
+.tabs-arrow.prev { left: -4px; }
+.tabs-arrow.next { right: -4px; }
+.chip-close {
+  position: absolute; right: 6px; top: 50%; width: 22px; height: 22px; margin-top: -11px; border-radius: 50%;
+  display: grid; place-items: center; padding: 0; cursor: pointer;
+  background: none; border: 0; color: var(--text-3);
+  transition: color 0.2s, background 0.2s;
+}
+.chip-close svg { width: 10px; height: 10px; }
+.chip-close:hover, .chip-close:focus-visible { color: var(--text); background: var(--surface-3); }
+.chip[aria-current="true"] + .chip-close:hover { background: var(--line-2); }
 @keyframes chip-in { from { opacity: 0; transform: scale(0.85) translateY(6px); } }
 .chip {
   position: relative; overflow: hidden;
   display: flex; align-items: center; gap: 9px; max-width: 300px;
-  padding: 8px 14px 8px 12px; border-radius: 12px;
+  padding: 8px 34px 8px 12px; border-radius: 12px;
   background: var(--surface); border: 1px solid var(--line); cursor: pointer; text-align: left;
   transition: background 0.2s, border-color 0.2s, transform 0.2s var(--ease-out);
 }
-.chip:hover { background: var(--surface-2); transform: translateY(-1px); }
+.session li:hover > .chip:not([aria-current="true"]) { background: var(--surface-2); }
 .chip[aria-current="true"] { border-color: var(--line-3); background: var(--surface-3); }
 .chip.busy::after {
   content: ""; position: absolute; left: 0; bottom: 0; height: 2px; width: 40%;
@@ -630,6 +665,11 @@ footer p { margin: 0; }
   .top { gap: 10px; padding-top: 12px; padding-bottom: 12px; }
   .brand .wordmark { display: none; }
   .nav a { padding: 6px 11px; font-size: 13px; }
+  .header-tools { gap: 6px; }
+  .session .add-song .lbl { display: none; }
+  .session .add-song { padding: 9px 11px; position: relative; }
+  .session .add-song .changed-dot { position: absolute; top: 5px; right: 5px; }
+  .chip { max-width: 220px; }
   .scope { height: 300px; border-radius: var(--r-lg); }
   .scope.empty { height: 620px; }
   .cta .btn { padding: 11px 16px; font-size: 14px; }
