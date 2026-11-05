@@ -593,6 +593,12 @@ main { max-width: var(--max); margin: 0 auto; padding: 0 var(--gutter) 48px; }
 .modes button[data-mode="iso"][aria-pressed="true"] { color: var(--lilac); }
 .modes button[data-mode="dst"][aria-pressed="true"] { color: var(--cyan); }
 .modes button[data-mode="src"][aria-pressed="true"] { color: var(--amber); }
+.blend { display: flex; align-items: center; gap: 12px; padding: 6px 22px 10px; }
+.blend-end { font-size: 12px; color: var(--text-3); transition: color 0.2s; flex: none; }
+.blend.at-dst .blend-end.dst { color: var(--cyan); }
+.blend.at-iso .blend-end.iso { color: var(--lilac); }
+.blend input[type="range"] { flex: 1; margin: 0; background: linear-gradient(90deg, var(--cyan), var(--lilac)); opacity: 0.9; }
+.blend.off { opacity: 0.4; pointer-events: none; }
 .mode-note { margin: 0 22px 14px; font-size: 12.5px; color: var(--text-3); min-height: 1.5em; }
 .mode-note.flash { animation: note 0.45s var(--ease-out); }
 @keyframes note { from { opacity: 0; transform: translateY(-4px); } }
@@ -617,6 +623,22 @@ main { max-width: var(--max); margin: 0 auto; padding: 0 var(--gutter) 48px; }
 .tune .reset { background: none; border: 0; color: var(--cyan); cursor: pointer; font-size: 13px; animation: pop 0.3s var(--ease-out); }
 .tune .reset:hover { text-decoration: underline; text-underline-offset: 3px; }
 .tune .hint { flex-basis: 100%; font-size: 12.5px; color: var(--text-3); margin: 0; }
+.tune.cleanup { gap: 10px 18px; }
+.nr-amount { display: inline-flex; align-items: center; gap: 10px; flex: 1 1 180px; min-width: 160px; }
+.nr-amount[hidden] { display: none; }
+.nr-amount input[type="range"] { flex: 1; margin: 0; }
+.nr-amount output { font: 12.5px var(--mono); color: var(--text-2); min-width: 4ch; text-align: right; }
+.tune.cleanup .hint:empty { display: none; }
+.cleanup.working .hint::after { content: " Working…"; color: var(--amber); }
+.scope-tip {
+  position: absolute; z-index: 3; pointer-events: none; transform: translate(-50%, calc(-100% - 10px));
+  padding: 7px 11px; border-radius: 10px; white-space: nowrap; font-size: 12px; color: var(--text-2);
+  background: var(--toast); border: 1px solid var(--line-2); box-shadow: 0 10px 30px var(--shadow);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+}
+.scope-tip b { color: var(--lilac); font-weight: 600; margin-right: 6px; }
+.scope-tip .s { color: var(--amber); } .scope-tip .d { color: var(--cyan); }
+.scope-tip small { display: block; color: var(--text-3); font-size: 11.5px; margin-top: 2px; }
 
 .export {
   display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap;
@@ -634,10 +656,50 @@ main { max-width: var(--max); margin: 0 auto; padding: 0 var(--gutter) 48px; }
 .field select:hover { border-color: var(--line-3); background-color: var(--surface-3); }
 .field select option { background: var(--option); color: var(--text); }
 .export .btn.primary { flex: none; min-width: 150px; }
+.crop-row { flex-basis: 100%; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; padding-bottom: 6px; font-size: 13px; color: var(--text-2); }
+.crop-fields { display: inline-flex; align-items: center; gap: 8px; color: var(--text-3); }
+.crop-fields[hidden] { display: none; }
+.crop-fields input {
+  width: 84px; padding: 6px 10px; border-radius: 10px; font: 12.5px var(--mono); color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--line-2); transition: border-color 0.2s;
+}
+.crop-fields input:focus { border-color: var(--lilac); outline: none; }
+.crop-fields input.bad { border-color: var(--danger); }
+.crop-len { font: 12px var(--mono); color: var(--text-3); }
+.crop-note { font-size: 12px; color: var(--text-3); }
+.crop-note:empty { display: none; }
+.loop input:disabled + .switch { opacity: 0.4; }
+.crop-h {
+  position: absolute; top: 0; bottom: 0; z-index: 2; width: var(--hw, 22px); padding: 0;
+  background: none; border: 0; cursor: ew-resize; touch-action: none;
+}
+.crop-h[hidden] { display: none; }
+.crop-h::before { content: ""; position: absolute; left: var(--line, 50%); top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--lilac); box-shadow: 0 0 10px var(--lilac); }
+.crop-h::after {
+  content: ""; position: absolute; left: 50%; top: 50%; width: 10px; height: 26px; margin: -13px 0 0 -5px; border-radius: 5px;
+  background: var(--lilac); box-shadow: 0 2px 8px var(--shadow);
+}
+.crop-h:hover::after, .crop-h:focus-visible::after, .crop-h.drag::after { transform: scaleX(1.25); }
+.crop-h:focus-visible { outline: none; }
+.crop-h:focus-visible::before { width: 3px; }
+
+/* --------------------------------------------------------- touch screens */
+@media (hover: none) and (pointer: coarse) {
+  /* iOS Safari zooms the page into any field with text under 16px */
+  input, select, textarea { font-size: 16px !important; }
+  .crop-fields input { width: 96px; }
+  /* bigger hit areas without changing how things look */
+  .chip-close::before { content: ""; position: absolute; inset: -9px -6px; }
+  .crop-h { --hw: 40px; }
+  .drop-hint { display: none; }   /* phones and tablets have nowhere to drop from */
+}
 
 /* ----------------------------------------------------------------- footer */
 footer { max-width: var(--max); margin: 0 auto; padding: 8px var(--gutter) 36px; color: var(--text-3); font-size: 13px; display: flex; flex-wrap: wrap; gap: 8px 28px; justify-content: space-between; }
 footer p { margin: 0; }
+.install[hidden], .install [hidden] { display: none; }
+.link-btn { background: none; border: 0; padding: 0; font: inherit; color: var(--cyan); cursor: pointer; }
+.link-btn:hover { text-decoration: underline; text-underline-offset: 3px; }
 
 /* ------------------------------------------------------------------ toast */
 .toast {
@@ -682,7 +744,7 @@ footer p { margin: 0; }
   .wave-wrap { height: 120px; margin: 0 16px; }
   .wave-times, .facts-grid, .mode-note, .spectrum { margin-left: 16px; margin-right: 16px; }
   .spec-legend { display: none; }
-  .transport, .tune, .panel-head { padding-left: 16px; padding-right: 16px; }
+  .transport, .tune, .panel-head, .blend { padding-left: 16px; padding-right: 16px; }
   .export { margin: 16px; }
   .export .btn.primary { width: 100%; }
   .result .times { font-size: 13px; }

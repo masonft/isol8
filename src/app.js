@@ -610,7 +610,18 @@
   const player = {
     ctx: null, nodes: null, playing: false, startedAt: 0, offset: 0,
     mode: "iso", key: null, buffers: null, iso: null, nudge: 0, best: null, duration: 0,
+    blend: 1,            // 0 = twin, 1 = isolated (twin minus the whole copy)
+    clean: loadClean(),  // {noise, amount}: optional noise reduction of the isolation
   };
+  function loadClean() {
+    const def = { noise: false, amount: 0.5 };
+    try {
+      const v = JSON.parse(localStorage.getItem("isol8-clean"));
+      if (v && typeof v === "object") return { noise: !!v.noise, amount: Number.isFinite(v.amount) ? Math.max(0, Math.min(1, v.amount)) : def.amount };
+    } catch { /* storage off */ }
+    return def;
+  }
+  function saveClean() { try { localStorage.setItem("isol8-clean", JSON.stringify(player.clean)); } catch { /* storage off */ } }
 
   function renderPlayer() {
     const p = result(), t = track();
@@ -629,11 +640,12 @@
     const fresh = player.key !== key;
     if (fresh) {
       player.key = key; player.nudge = 0; player.best = null; player.buffers = null; player.offset = 0; player.iso = null; player.spec = null;
+      player.crop = null; renderCrop();
       waveBase = null;
       scope.pulseAt = performance.now(); scope.pulseId = p.id; wakeScope();
     }
     updateAlignmentUi();
-    if (!$("modeNote").textContent) $("modeNote").textContent = MODE_NOTE[player.mode];
+    if (!$("modeNote").textContent) $("modeNote").textContent = modeNote();
     requestAnimationFrame(placeModePill);
     prepareBuffers().then(() => { if (player.key !== key) return; if (fresh) playIntro(); else drawWave(); });
   }
@@ -652,7 +664,8 @@
 
   /** Shared by renderPlayer and play(), so a click that does both computes the buffers once. */
   function prepareBuffers() {
-    const tag = `${player.key}|${player.nudge}`;
+    const c = player.clean;
+    const tag = `${player.key}|${player.nudge}|${c.noise}|${c.noise ? c.amount : ""}`;
     if (player.prep && player.prep.tag === tag) return player.prep.promise;
     const promise = buildBuffers().finally(() => { if (player.prep && player.prep.promise === promise) player.prep = null; });
     player.prep = { tag, promise };
@@ -665,14 +678,20 @@
     if (player.key !== key || result() !== p) return;          // the selection moved on meanwhile
     const lag = currentLag();
     const s = Math.max(p.dstStart, lag), e = Math.min(p.dstEnd, ch[0].length);
-    player.iso = E.isolate(ch, lag, s, e);
-    player.dst = ch.map((c) => c.subarray(s, e));
+    const clean = Object.assign({}, player.clean);
+    const dst = ch.map((c) => c.subarray(s, e)), src = ch.map((c) => c.subarray(s - lag, e - lag));
+    if (clean.noise) { $("cleanHint").closest(".cleanup").classList.add("working"); await new Promise((r) => setTimeout(r, 30)); }
+    let iso = E.isolate(ch, lag, s, e);
+    if (clean.noise) iso = E.denoise(iso, dst, p.sr, clean.amount);
+    $("cleanHint").closest(".cleanup").classList.remove("working");
+    if (player.key !== key || result() !== p || currentLag() !== lag || player.clean.noise !== clean.noise || player.clean.amount !== clean.amount) return;
+    player.iso = iso; player.dst = dst; player.src = src;
     player.span = [s, e];
-    player.src = ch.map((c) => c.subarray(s - lag, e - lag));
     player.duration = (e - s) / p.sr;
+    if (player.crop) setCrop(player.crop[0], player.crop[1]);   // the section can shrink when nudged
     player.buffers = null; // AudioBuffers are made lazily on play (needs a context)
-    if (player.nudge !== 0) player.best = E.cancelDb(ch, lag, s, e);
-    else player.best = null;
+    player.best = player.nudge !== 0 || clean.noise ? E.cancelDbOf(dst, src, iso) : null;
+    renderCleanHint();
     player.spec = staticSpectrum(player.dst, player.iso, p.sr);
     updateAlignmentUi();
   }
@@ -710,6 +729,20 @@
     return Promise.resolve(player.ctx);
   }
 
+  /** Volume of each stream: the blend slides from the twin (0) to the isolation (1). */
+  function gainFor(m) {
+    if (player.mode === "src") return m === "src" ? 1 : 0;
+    return m === "dst" ? 1 - player.blend : m === "iso" ? player.blend : 0;
+  }
+  function applyGains() {
+    if (!player.nodes) return;
+    const now = player.ctx.currentTime;
+    for (const [m, n] of Object.entries(player.nodes)) {
+      n.g.gain.cancelScheduledValues(now);
+      n.g.gain.setTargetAtTime(gainFor(m), now, 0.008);
+    }
+  }
+
   let playSeq = 0;   // bumped by every start/stop, so an older play() that is still awaiting gives up
   async function play() {
     const p = result();
@@ -726,22 +759,24 @@
     }
     const ctx = player.ctx, loop = $("loop").checked;
     const at = ctx.currentTime + 0.03;
-    if (player.offset >= player.duration - 0.01) player.offset = 0;
+    const [ca, cb] = cropRange();
+    if (player.offset < ca || player.offset >= cb - 0.01) player.offset = ca;
     player.nodes = {};
     for (const m of MODES) {
       const src = ctx.createBufferSource(), g = ctx.createGain();
       src.buffer = player.buffers[m]; src.loop = loop;
-      g.gain.value = m === player.mode ? 1 : 0;
+      if (loop) { src.loopStart = ca; src.loopEnd = cb; }
+      g.gain.value = gainFor(m);
       src.connect(g).connect(ctx.destination);
       let an = null;
       if (m === "dst" || m === "iso") {                // live spectrum taps (before the mode gain)
         an = ctx.createAnalyser(); an.fftSize = 4096; an.smoothingTimeConstant = 0.78;
         src.connect(an);
       }
-      src.start(at, player.offset);
+      if (loop) src.start(at, player.offset); else src.start(at, player.offset, cb - player.offset);
       player.nodes[m] = { src, g, an };
     }
-    player.nodes.iso.src.onended = () => { if (player.playing && !$("loop").checked) { player.playing = false; player.offset = 0; setPlayIcon(); } };
+    player.nodes.iso.src.onended = () => { if (player.playing && !$("loop").checked) { player.playing = false; player.offset = cropRange()[0]; setPlayIcon(); } };
     player.startedAt = at - player.offset;
     player.playing = true;
     setPlayIcon();
@@ -750,8 +785,103 @@
 
   function position() {
     if (!player.playing) return player.offset;
-    const t = player.ctx.currentTime - player.startedAt;
-    return $("loop").checked ? ((t % player.duration) + player.duration) % player.duration : Math.min(t, player.duration);
+    const t = player.ctx.currentTime - player.startedAt;     // where the section would be without looping
+    const [ca, cb] = cropRange();
+    if (!$("loop").checked) return Math.min(t, cb);
+    return t < cb ? Math.max(0, t) : ca + ((t - ca) % (cb - ca));
+  }
+
+  // ------------------------------------------------------------------ crop
+  // Section-relative seconds [start, end]; null = the whole section. Playback stays inside it
+  // and the isolated-sound export is cut to it.
+  const MIN_CROP = 0.05;
+  const cropRange = () => player.crop || [0, player.duration];
+  function setCrop(a, b, moving) {
+    const d = player.duration;
+    if (!(d > MIN_CROP)) return;
+    a = Math.max(0, Math.min(a, d)); b = Math.max(0, Math.min(b, d));
+    if (b - a < MIN_CROP) { if (moving === "a") a = b - MIN_CROP; else b = a + MIN_CROP; }
+    if (a < 0) { a = 0; b = MIN_CROP; }
+    if (b > d) { b = d; a = d - MIN_CROP; }
+    player.crop = [a, b];
+    renderCrop();
+    drawWaveHead();
+  }
+  function renderCrop() {
+    const on = !!player.crop, p = result();
+    $("cropOn").checked = on;
+    $("cropFields").hidden = !on;
+    $("cropA").hidden = $("cropB").hidden = !on;
+    $("cropNote").textContent = on && $("exportWhat").value === "invSong" ? "Crop only applies when exporting the isolated sound." : "";
+    if (!on || !p || !player.span) return;
+    const [a, b] = player.crop, d = Math.max(player.duration, 1e-9), base = player.span[0] / p.sr;
+    // keep each handle's grab area inside the waveform; the line inside it stays exact
+    const W = $("waveWrap").clientWidth;
+    for (const [id, v] of [["cropA", a], ["cropB", b]]) {
+      const h = $(id), hw = h.offsetWidth || 22, x = (v / d) * W;
+      const left = Math.max(0, Math.min(W - hw, x - hw / 2));
+      h.style.left = `${left}px`;
+      h.style.setProperty("--line", `${x - left}px`);
+    }
+    for (const [id, v] of [["cropStart", a], ["cropEnd", b]]) {
+      const el = $(id);
+      if (document.activeElement !== el) { el.value = fmtTime(base + v, 2); el.classList.remove("bad"); }
+    }
+    $("cropLen").textContent = `${(b - a).toFixed(2)} s`;
+  }
+  function restartIfPlaying() { if (player.playing) { const pos = position(); pause(); player.offset = pos; play(); } }
+  function bindCrop() {
+    const ww = $("waveWrap");
+    $("cropOn").addEventListener("change", (e) => {
+      if (e.target.checked) setCrop(0, player.duration);
+      else { player.crop = null; renderCrop(); drawWaveHead(); }
+      restartIfPlaying();
+    });
+    $("exportWhat").addEventListener("change", renderCrop);
+    window.addEventListener("resize", () => { if (player.crop) renderCrop(); });
+    for (const [id, which] of [["cropA", "a"], ["cropB", "b"]]) {
+      const h = $(id);
+      const at = (e) => { const r = ww.getBoundingClientRect(); return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * player.duration; };
+      const move = (v) => { const [a, b] = cropRange(); setCrop(which === "a" ? v : a, which === "b" ? v : b, which); };
+      let dragging = null;
+      h.addEventListener("pointerdown", (e) => {
+        e.stopPropagation(); e.preventDefault();
+        dragging = e.pointerId;
+        try { h.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
+        h.classList.add("drag"); h.focus({ preventScroll: true });
+      });
+      h.addEventListener("pointermove", (e) => { if (dragging === e.pointerId) move(at(e)); });
+      const end = (e) => {
+        if (dragging !== e.pointerId) return;
+        dragging = null; h.classList.remove("drag");
+        try { h.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
+        restartIfPlaying();
+      };
+      h.addEventListener("pointerup", end);
+      h.addEventListener("pointercancel", end);
+      h.addEventListener("click", (e) => e.stopPropagation());
+      h.addEventListener("keydown", (e) => {
+        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+        e.preventDefault(); e.stopPropagation();
+        const step = (e.shiftKey ? 0.5 : 0.05) * (e.key === "ArrowLeft" ? -1 : 1);
+        move(cropRange()[which === "a" ? 0 : 1] + step);
+      });
+      h.addEventListener("keyup", (e) => { if (e.key === "ArrowLeft" || e.key === "ArrowRight") restartIfPlaying(); });
+    }
+    for (const [id, which] of [["cropStart", "a"], ["cropEnd", "b"]]) {
+      const el = $(id);
+      const commit = () => {
+        const p = result(), v = parseTime(el.value);
+        if (!p || !player.span || !Number.isFinite(v)) { el.classList.add("bad"); return; }
+        const rel = v - player.span[0] / p.sr, [a, b] = cropRange();
+        el.classList.remove("bad");
+        setCrop(which === "a" ? rel : a, which === "b" ? rel : b, which);
+        el.value = fmtTime(player.span[0] / p.sr + player.crop[which === "a" ? 0 : 1], 2);
+        restartIfPlaying();
+      };
+      el.addEventListener("change", commit);
+      el.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); commit(); } });
+    }
   }
 
   function stopPlayback(keepPosition = false) {
@@ -775,24 +905,55 @@
     pill.style.setProperty("--w", `${b.offsetWidth}px`);
   }
 
-  function setMode(mode) {
+  function setMode(mode, fromBlend) {
     const changed = player.mode !== mode;
     player.mode = mode;
+    if (!fromBlend && mode === "iso") player.blend = 1;
+    if (!fromBlend && mode === "dst") player.blend = 0;
+    renderBlend();
     document.querySelectorAll(".modes button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.mode === mode ? "true" : "false"));
     placeModePill();
     const pb = $("playBtn");
     MODES.forEach((m) => pb.classList.toggle(m, m === mode && m !== "iso"));
     const note = $("modeNote");
-    note.textContent = MODE_NOTE[mode];
+    note.textContent = modeNote();
     if (changed) { note.classList.remove("flash"); void note.offsetWidth; note.classList.add("flash"); }
-    if (player.nodes) {
-      const now = player.ctx.currentTime;
-      for (const [m, n] of Object.entries(player.nodes)) {
-        n.g.gain.cancelScheduledValues(now);
-        n.g.gain.setTargetAtTime(m === mode ? 1 : 0, now, 0.008);
-      }
-    }
+    applyGains();
     drawWave();
+  }
+  function modeNote() {
+    if (player.mode === "src" || player.blend <= 0 || player.blend >= 1) return MODE_NOTE[player.mode];
+    return `Twin with ${Math.round(player.blend * 100)}% of the flipped copy added. Slide right and the shared music cancels away, leaving the hidden part.`;
+  }
+  function renderBlend() {
+    const row = $("blendRow"), r = $("blend"), b = player.blend;
+    r.value = String(Math.round(b * 100));
+    r.setAttribute("aria-valuetext", b >= 1 ? "Isolated" : b <= 0 ? "Twin" : `${Math.round(b * 100)}% isolated`);
+    row.classList.toggle("off", player.mode === "src");
+    row.classList.toggle("at-dst", player.mode !== "src" && b <= 0);
+    row.classList.toggle("at-iso", player.mode !== "src" && b >= 1);
+  }
+  function setBlend(v) {
+    player.blend = Math.max(0, Math.min(1, v));
+    const mode = player.blend >= 0.5 ? "iso" : "dst";
+    if (mode !== player.mode) setMode(mode, true);
+    else { renderBlend(); $("modeNote").textContent = modeNote(); applyGains(); }
+  }
+
+  function renderCleanHint() {
+    $("cleanHint").textContent = player.clean.noise
+      ? `Noise reduction at ${Math.round(player.clean.amount * 100)}%. Higher removes more of the leftover music, but can also soften quiet parts of the hidden sound.` : "";
+  }
+  async function setClean(k, on) {
+    player.clean[k] = on; saveClean();
+    const p = result();
+    if (!p) return;
+    const wasPlaying = player.playing, pos = position();
+    stopPlayback();
+    await prepareBuffers();
+    player.offset = Math.min(pos, player.duration);
+    drawWave(); drawSpectrum(false);
+    if (wasPlaying) play();
   }
 
   function seek(frac) {
@@ -1069,6 +1230,11 @@
     g.fillStyle = glow; g.fillRect(Math.max(0, x - 40), 0, Math.min(40, x), c.height);
     g.fillStyle = `rgb(${P.ink})`;
     g.fillRect(Math.round(x) - 1, 0, 2, c.height);
+    if (player.crop) {
+      const d = Math.max(player.duration, 1e-9), xa = (player.crop[0] / d) * c.width, xb = (player.crop[1] / d) * c.width;
+      g.fillStyle = `rgba(${P.bg},0.62)`;
+      g.fillRect(0, 0, xa, c.height); g.fillRect(xb, 0, c.width - xb, c.height);
+    }
     scope.playhead = player.playing || player.offset > 0 ? position() : null;
   }
 
@@ -1097,6 +1263,19 @@
     });
   }
 
+  /** Cut section-relative [a, b] seconds out, with 3 ms fades so the cut edges don't click. */
+  function cropChannels(chs, [a, b], sr) {
+    const i0 = Math.max(0, Math.round(a * sr)), i1 = Math.min(chs[0].length, Math.round(b * sr));
+    const fade = Math.min(Math.round(sr * 0.003), (i1 - i0) >> 2);
+    return chs.map((c) => {
+      const o = c.slice(i0, i1), n = o.length;
+      for (let i = 0; i < fade; i++) { const k = i / fade; o[i] *= k; o[n - 1 - i] *= k; }
+      return o;
+    });
+  }
+  const fileTime = (s) => fmtTime(s, 1).replace(":", "m") + "s";
+  function cropLabel([a, b], p) { const base = player.span[0] / p.sr; return `${fileTime(base + a)}-${fileTime(base + b)}`; }
+
   async function download() {
     const t = track(), p = result();
     if (!p || exporting) return;
@@ -1106,7 +1285,9 @@
     try {
       setDownloadBusy("Preparing…");
       await new Promise((r) => setTimeout(r, 20));
-      const chs = await exportChannels(what);
+      let chs = await exportChannels(what);
+      const crop = what === "iso" && player.crop ? player.crop : null;
+      if (crop) chs = cropChannels(chs, crop, p.sr);
       let out;
       if (fmt === "mp3") {
         try {
@@ -1120,7 +1301,7 @@
       if (!out) out = Isol8Export.encodeWav(chs, p.sr, fmt);
       const ext = fmt === "mp3" ? "mp3" : "wav";
       const where = `${fmtTime(p.srcStart / p.sr, 0).replace(":", "m")}s to ${fmtTime(p.dstStart / p.sr, 0).replace(":", "m")}s`;
-      const name = `isol8.it - ${baseName(t.name)} - #${p.rank} ${WHAT_LABEL[what]} (${where})${player.nudge ? ` nudged ${player.nudge > 0 ? "+" : ""}${player.nudge}` : ""}.${ext}`;
+      const name = `isol8.it - ${baseName(t.name)} - #${p.rank} ${WHAT_LABEL[what]} (${where})${player.nudge ? ` nudged ${player.nudge > 0 ? "+" : ""}${player.nudge}` : ""}${player.clean.noise ? " denoised" : ""}${crop ? ` cropped ${cropLabel(crop, p)}` : ""}.${ext}`;
       const url = URL.createObjectURL(out.blob);
       const a = document.createElement("a");
       a.href = url; a.download = name;
@@ -1220,11 +1401,14 @@
     const top = (metaH + 46) * dpr, base = h - 40 * dpr;          // arcs live between the title and the waveform
     const waveH = Math.min(70 * dpr, (base - top) * 0.42), mid = base - waveH;
     const xOf = (s) => (s / len) * w;
-    const results = t.results.slice(0, state.showAll ? t.results.length : VISIBLE);
+    const results = t.results;                         // every twin, not just the ones listed
     const sel = result();
+    const hov = scope.hover && scope.hover !== state.selected ? results.find((r) => r.id === scope.hover) : null;
+    scope.geo = { len, w, mid, waveH, dpr };
     scope.pulsing = false;
-    // spans of the selected pair
+    // spans of the selected (and hovered) pair
     const drawSpan = (a, b, col) => { g.fillStyle = col; g.fillRect(xOf(a), mid - waveH, Math.max(1, xOf(b) - xOf(a)), waveH * 2); };
+    if (hov) { drawSpan(hov.srcStart, hov.srcEnd, `rgba(${P.amber},0.08)`); drawSpan(hov.dstStart, hov.dstEnd, `rgba(${P.cyan},0.08)`); }
     if (sel) { drawSpan(sel.srcStart, sel.srcEnd, `rgba(${P.amber},0.13)`); drawSpan(sel.dstStart, sel.dstEnd, `rgba(${P.cyan},0.13)`); }
     // envelope
     let peak = 1e-6;
@@ -1235,6 +1419,8 @@
       let col = `rgba(${P.muted},0.3)`;
       if (sel && s >= sel.srcStart && s < sel.srcEnd) col = `rgba(${P.amber},0.85)`;
       else if (sel && s >= sel.dstStart && s < sel.dstEnd) col = `rgba(${P.cyan},0.85)`;
+      else if (hov && s >= hov.srcStart && s < hov.srcEnd) col = `rgba(${P.amber},0.5)`;
+      else if (hov && s >= hov.dstStart && s < hov.dstEnd) col = `rgba(${P.cyan},0.5)`;
       g.fillStyle = col;
       const y0 = mid - (env.mx[i] / peak) * waveH, y1 = mid - (env.mn[i] / peak) * waveH;
       g.fillRect(i * bw, y0, Math.max(1, bw - 1 * dpr), Math.max(1, y1 - y0));
@@ -1262,7 +1448,7 @@
       const y = mid - waveH - 4 * dpr;
       const isSel = p.id === state.selected, isHov = p.id === scope.hover;
       const grad = g.createLinearGradient(x1, 0, x2, 0);
-      const alpha = isSel ? 1 : isHov ? 0.8 : 0.32;
+      const alpha = isSel ? 1 : isHov ? 0.8 : results.length > VISIBLE ? 0.2 : 0.32;
       grad.addColorStop(0, `rgba(${P.amber},${alpha})`);
       grad.addColorStop(1, `rgba(${P.cyan},${alpha})`);
       g.strokeStyle = grad;
@@ -1919,6 +2105,14 @@
     $("addSong").addEventListener("click", () => $("fileInput").click());
     bindTabScroller();
     $("fileInput").addEventListener("change", (e) => { addFiles([...e.target.files]); e.target.value = ""; wakeScope(); });
+    // installed app: songs opened with isol8 from the OS ("Open with")
+    if ("launchQueue" in window) {
+      window.launchQueue.setConsumer(async (params) => {
+        const files = await Promise.all((params.files || []).map((h) => h.getFile().catch(() => null)));
+        const ok = files.filter(Boolean);
+        if (ok.length) { addFiles(ok); wakeScope(); }
+      });
+    }
 
     const sc = $("scope");
     let depth = 0;
@@ -1940,6 +2134,17 @@
     $("nudgeUp").addEventListener("click", () => nudge(+1));
     $("nudgeReset").addEventListener("click", () => nudge(0));
     $("download").addEventListener("click", download);
+    $("blend").addEventListener("input", (e) => setBlend(e.target.value / 100));
+    $("cleanNoise").checked = player.clean.noise;
+    $("cleanNoise").addEventListener("change", (e) => { $("nrAmountWrap").hidden = !e.target.checked; setClean("noise", e.target.checked); });
+    $("nrAmount").value = String(Math.round(player.clean.amount * 100));
+    $("nrAmountOut").textContent = `${$("nrAmount").value}%`;
+    $("nrAmountWrap").hidden = !player.clean.noise;
+    $("nrAmount").addEventListener("input", (e) => { $("nrAmountOut").textContent = `${e.target.value}%`; });
+    // rebuild once the slider is let go (a rebuild takes a moment on long sections)
+    $("nrAmount").addEventListener("change", (e) => setClean("amount", e.target.value / 100));
+    bindCrop();
+    renderBlend();
     $("settingsToggle").addEventListener("click", () => toggleSettings());
     $("settingsBtn").addEventListener("click", () => toggleSettings());
     $("settingsClose").addEventListener("click", () => toggleSettings(false));
@@ -1961,21 +2166,50 @@
     });
 
     // twin map: hover + click on arcs
-    const cv = $("scopeCanvas");
+    const cv = $("scopeCanvas"), tip = $("scopeTip");
+    /** The twin under the pointer: an arc, or else a copied/twin span on the waveform (best ranked wins). */
     const nearest = (e) => {
       const r = cv.getBoundingClientRect(), dpr = cv.width / r.width;
       const x = (e.clientX - r.left) * dpr, y = (e.clientY - r.top) * dpr;
       let best = null, bd = 14 * dpr;
       for (const a of scope.arcs) for (const [px, py] of a.pts) { const d = Math.hypot(px - x, py - y); if (d < bd) { bd = d; best = a.id; } }
+      const geo = scope.geo, t = track();
+      if (!best && geo && t && Math.abs(y - geo.mid) <= geo.waveH + 6 * dpr) {
+        const at = (x / geo.w) * geo.len;
+        let rank = Infinity;
+        for (const p of t.results) {
+          if (((at >= p.srcStart && at < p.srcEnd) || (at >= p.dstStart && at < p.dstEnd)) && p.rank < rank) { rank = p.rank; best = p.id; }
+        }
+      }
       return best;
     };
+    const showTip = (e, id) => {
+      const t = track(), p = id && t ? t.results.find((r) => r.id === id) : null;
+      if (!p || e.pointerType === "touch") { tip.hidden = true; return; }
+      const sr = p.sr, sc = $("scope").getBoundingClientRect();
+      tip.innerHTML = "";
+      const b = document.createElement("b"); b.textContent = `#${p.rank}`;
+      const sEl = document.createElement("span"); sEl.className = "s"; sEl.textContent = fmtTime(p.srcStart / sr);
+      const dEl = document.createElement("span"); dEl.className = "d"; dEl.textContent = fmtTime(p.dstStart / sr);
+      const small = document.createElement("small");
+      small.textContent = `${((p.dstEnd - p.dstStart) / sr).toFixed(1)} s · cancels ${p.cancelDb.toFixed(1)} dB · ${kindOf(p)}`;
+      tip.append(b, sEl, " → ", dEl, small);
+      tip.hidden = false;
+      const x = Math.max(90, Math.min(sc.width - 90, e.clientX - sc.left));
+      tip.style.left = `${x}px`; tip.style.top = `${e.clientY - sc.top}px`;
+    };
     cv.addEventListener("pointermove", (e) => {
-      if (scope.mode !== "map") return;
+      if (scope.mode !== "map") { tip.hidden = true; return; }
       const id = nearest(e);
+      showTip(e, id);
       if (id !== scope.hover) { scope.hover = id; cv.style.cursor = id ? "pointer" : ""; wakeScope(); }
     });
-    cv.addEventListener("pointerleave", () => { scope.hover = null; wakeScope(); });
-    cv.addEventListener("click", (e) => { if (scope.mode !== "map") return; const id = nearest(e); if (id) { selectResult(id, "play"); wakeScope(); } });
+    cv.addEventListener("pointerleave", () => { scope.hover = null; tip.hidden = true; wakeScope(); });
+    cv.addEventListener("click", (e) => {
+      if (scope.mode !== "map") return;
+      const id = nearest(e);
+      if (id) { selectResult(id, "play"); wakeScope(); }
+    });
 
     document.addEventListener("keydown", (e) => {
       if (e.target.closest("input, select, textarea") || e.metaKey || e.ctrlKey || e.altKey) return;

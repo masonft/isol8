@@ -744,8 +744,96 @@
     });
   }
 
+  /** Cancellation in dB from already-cut sections: level of the twins over level of the isolation. */
+  function cancelDbOf(dst, src, iso) {
+    let e1 = 0, e2 = 0, er = 0;
+    for (let c = 0; c < dst.length; c++) {
+      const a = dst[c], b = src[c], r = iso[c];
+      for (let i = 0; i < r.length; i++) { e1 += a[i] * a[i]; e2 += b[i] * b[i]; er += r[i] * r[i]; }
+    }
+    return 10 * Math.log10((e1 + e2) / 2 / (er + 1e-20));
+  }
+
+  /**
+   * Reduce what's left of the shared music in an isolation. Imperfect cancellation (lossy
+   * codecs, dither, mastering) leaves a residue that follows the twin's spectrum. Per frequency
+   * bin, estimate how strongly the twin leaks through, then apply a smoothed spectral gate. One mask for all channels keeps the stereo image.
+   */
+  function denoise(iso, dst, sr, amount) {
+    // amount 0..1: how hard to subtract (alpha) and how far gated bins may drop (gMin, -6 to -30 dB)
+    const a = Math.max(0, Math.min(1, amount === undefined ? 0.5 : amount));
+    const alpha = 0.5 + 3.5 * a, gMin = Math.pow(10, -(6 + 24 * a) / 20);
+    const n = iso[0].length;
+    const N = Math.max(512, nextPow2(Math.round(sr * 0.046))), hop = N >> 2, K = N / 2 + 1;
+    if (n < N * 2) return iso;
+    const F = Math.ceil((n + N) / hop) + 1, pad = N;          // frames cover [-N, n + N)
+    const win = hann(N), fft = rfftFor(N);
+    const re = new Float64Array(K), im = new Float64Array(K), frame = new Float64Array(N);
+    const monoOf = (chs) => { const m = new Float32Array(n); for (const c of chs) for (let i = 0; i < n; i++) m[i] += c[i] / chs.length; return m; };
+    const cut = (x, f) => {
+      const o = f * hop - pad;
+      for (let i = 0; i < N; i++) { const j = o + i; frame[i] = j >= 0 && j < n ? x[j] * win[i] : 0; }
+    };
+    const mags = (x) => {
+      const M = new Float32Array(F * K);
+      for (let f = 0; f < F; f++) {
+        cut(x, f); fft.forward(frame, re, im);
+        for (let k = 0; k < K; k++) M[f * K + k] = Math.hypot(re[k], im[k]);
+      }
+      return M;
+    };
+    const MI = mags(monoOf(iso)), MD = mags(monoOf(dst));
+    // per bin: how much of the twin leaks into the isolation. Use the frames where it leaks
+    // least, and cap each bin near the typical leak across all bins, so a hidden sound that
+    // sits in a few bins for the whole section isn't mistaken for leakage.
+    const col = new Float32Array(F), beta = new Float32Array(K);
+    const pctl = (arr, q) => { const x = Float32Array.from(arr).sort(); return x[Math.min(x.length - 1, Math.floor(q * x.length))]; };
+    for (let k = 0; k < K; k++) {
+      let m = 0;
+      for (let f = 0; f < F; f++) { const d = MD[f * K + k]; if (d > 1e-9) col[m++] = MI[f * K + k] / d; }
+      beta[k] = m ? pctl(col.subarray(0, m), 0.25) : 0;
+    }
+    const cap = 2 * pctl(beta, 0.5);
+    for (let k = 0; k < K; k++) beta[k] = Math.min(beta[k], cap);
+    const G = new Float32Array(F * K);
+    for (let f = 0; f < F; f++) {
+      for (let k = 0; k < K; k++) {
+        const x = MI[f * K + k], nz = beta[k] * MD[f * K + k];
+        G[f * K + k] = x > 1e-12 ? Math.max(gMin, 1 - (alpha * nz * nz) / (x * x)) : gMin;
+      }
+    }
+    // smooth the mask over time and frequency so it doesn't warble ("musical noise")
+    const S = new Float32Array(F * K);
+    for (let f = 0; f < F; f++) {
+      for (let k = 0; k < K; k++) {
+        let sum = 0, cnt = 0;
+        for (let df = -1; df <= 1; df++) {
+          const ff = f + df; if (ff < 0 || ff >= F) continue;
+          for (let dk = -1; dk <= 1; dk++) { const kk = k + dk; if (kk < 0 || kk >= K) continue; sum += G[ff * K + kk]; cnt++; }
+        }
+        S[f * K + k] = Math.sqrt(sum / cnt);                  // power gain -> amplitude gain
+      }
+    }
+    // apply per channel, overlap-add with the same window
+    const norm = new Float64Array(n);
+    for (let f = 0; f < F; f++) { const o = f * hop - pad; for (let i = 0; i < N; i++) { const j = o + i; if (j >= 0 && j < n) norm[j] += win[i] * win[i]; } }
+    const out = new Float64Array(N);
+    return iso.map((x) => {
+      const y = new Float32Array(n);
+      for (let f = 0; f < F; f++) {
+        cut(x, f); fft.forward(frame, re, im);
+        for (let k = 0; k < K; k++) { const gk = S[f * K + k]; re[k] *= gk; im[k] *= gk; }
+        fft.inverse(re, im, out);
+        const o = f * hop - pad;
+        for (let i = 0; i < N; i++) { const j = o + i; if (j >= 0 && j < n) y[j] += out[i] * win[i]; }
+      }
+      for (let i = 0; i < n; i++) y[i] = norm[i] > 1e-9 ? y[i] / norm[i] : 0;
+      return y;
+    });
+  }
+
   return {
-    detectTwins, isolate, cancelDb, mono, DEFAULTS, probePair,
+    detectTwins, isolate, cancelDb, mono, DEFAULTS, probePair, cancelDbOf, denoise,
     // pipeline steps (worker pool)
     prepare, features, lagRange, coarseScan, selectCandidates, analyseCandidate, explained, finalize,
     // internals exposed for tests
