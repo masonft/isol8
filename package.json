@@ -5,7 +5,7 @@
   "description": "Isolate hidden sounds in songs by phase-cancelling sample-identical repeated sections. Runs entirely in the browser.",
   "scripts": {
     "serve": "python3 -m http.server 8080 -d src",
-    "test": "node tests/fft.test.js && node tests/synthetic.test.js && node tests/decode.test.js && node tests/engine.test.js && node tests/probe.test.js && node tests/cleanup.test.js",
+    "test": "node tests/fft.test.js && node tests/synthetic.test.js && node tests/decode.test.js && node tests/engine.test.js && node tests/probe.test.js && node tests/cleanup.test.js && node tests/regions.test.js && node tests/shaping.test.js",
     "test:e2e": "node tests/e2e.js"
   },
   "engines": {

@@ -207,6 +207,9 @@
 
   /** Level of a section minus level of its isolation, dB (both twins averaged). */
   function cancelDb(channels, lag, a, b) {
+    // the copy can't start before the song does, nor the twin run past its end
+    a = Math.max(a, lag); b = Math.min(b, channels[0].length);
+    if (b <= a) return 0;
     let e1 = 0, e2 = 0, er = 0;
     for (const ch of channels) {
       for (let i = a; i < b; i++) {
@@ -214,7 +217,8 @@
         e1 += s1 * s1; e2 += s2 * s2; er += r * r;
       }
     }
-    return 10 * Math.log10((e1 + e2) / 2 / (er + 1e-20));
+    const db = 10 * Math.log10((e1 + e2) / 2 / (er + 1e-20));
+    return Number.isFinite(db) ? db : 0;               // silence on both sides, or bad samples
   }
 
   function hopFor(sr) { return Math.pow(2, Math.round(Math.log2(sr * 0.0464))); }
@@ -530,6 +534,7 @@
 
   // ------------------------------------------------------ pairs & dedup
   function makePair(ch, sr, lag, reg, extra) {
+    reg = Object.assign({}, reg, { s: Math.max(reg.s, lag) });
     const p = {
       lag, sr,
       dstStart: reg.s, dstEnd: reg.e,
@@ -553,7 +558,7 @@
 
   /** How different two results sound over their common span: 10log10(E(a) / E(a - b)). */
   function isolationSdr(ch, p, q) {
-    const s = Math.max(p.dstStart, q.dstStart), e = Math.min(p.dstEnd, q.dstEnd);
+    const s = Math.max(p.dstStart, q.dstStart, p.lag, q.lag), e = Math.min(p.dstEnd, q.dstEnd, ch[0].length);
     if (e <= s) return -Infinity;
     let ea = 0, ed = 0;
     for (const c of ch) {
@@ -585,7 +590,8 @@
         Math.min(p.dstEnd, q.dstEnd) - Math.max(p.dstStart, q.dstStart) > -gap);
       if (q) {
         q.merged += 1;
-        const s = Math.min(q.dstStart, p.dstStart), e = Math.max(q.dstEnd, p.dstEnd);
+        // the merged twin can't reach back before q's copy starts (offsets differ by a few samples)
+        const s = Math.max(q.lag, Math.min(q.dstStart, p.dstStart)), e = Math.min(ch[0].length, Math.max(q.dstEnd, p.dstEnd));
         if (s !== q.dstStart || e !== q.dstEnd) {
           const wq = q.dstEnd - q.dstStart, wp = p.dstEnd - p.dstStart;
           q.deep = (q.deep * wq + p.deep * wp) / (wq + wp);
@@ -744,6 +750,149 @@
     });
   }
 
+  /**
+   * Keep only part of the stereo image (mid/side). "center" is (L+R)/2 in both channels:
+   * whatever is panned to the middle, like most lead vocals. "sides" is (L-R)/2, written as
+   * +S on the left and -S on the right so it still sounds wide: whatever differs between the
+   * channels, like stereo effects and hard-panned parts. Center + sides adds back up to the
+   * original. Mono input, or "full", is returned unchanged.
+   */
+  function stereoPart(channels, part) {
+    if (channels.length < 2 || (part !== "center" && part !== "sides")) return channels;
+    const L = channels[0], R = channels[1], n = L.length, a = new Float32Array(n);
+    if (part === "center") {
+      for (let i = 0; i < n; i++) a[i] = 0.5 * (L[i] + R[i]);
+      return [a, a.slice()];
+    }
+    const b = new Float32Array(n);
+    for (let i = 0; i < n; i++) { const s = 0.5 * (L[i] - R[i]); a[i] = s; b[i] = -s; }
+    return [a, b];
+  }
+
+  /**
+   * Low-cut and/or high-cut, zero phase (each 2nd-order Butterworth runs forwards then
+   * backwards, so 24 dB/octave and no time shift: the filtered isolation still lines up with
+   * the song, which "Song without this sound" relies on). lowHz/highHz of 0 or null = off.
+   */
+  function bandLimit(channels, sr, lowHz, highHz) {
+    const nyq = sr / 2;
+    const stages = [];
+    if (lowHz > 0 && lowHz < nyq * 0.95) stages.push(biquad("hp", lowHz, sr));
+    if (highHz > 0 && highHz < nyq * 0.95) stages.push(biquad("lp", highHz, sr));
+    if (!stages.length) return channels;
+    return channels.map((c) => {
+      const n = c.length, pad = Math.min(n - 1, Math.round(sr * 0.05));
+      // mirror the ends so the filters start and stop without a thump
+      const x = new Float64Array(n + 2 * pad);
+      for (let i = 0; i < pad; i++) { x[pad - 1 - i] = 2 * c[0] - c[i + 1]; x[pad + n + i] = 2 * c[n - 1] - c[n - 2 - i]; }
+      for (let i = 0; i < n; i++) x[pad + i] = c[i];
+      for (const f of stages) { runBiquad(f, x, false); runBiquad(f, x, true); }
+      return Float32Array.from(x.subarray(pad, pad + n));
+    });
+  }
+  function biquad(type, f, sr) {             // RBJ cookbook, Q = 1/sqrt(2)
+    const w = (2 * Math.PI * f) / sr, cw = Math.cos(w), al = Math.sin(w) / Math.SQRT2, a0 = 1 + al;
+    const b = type === "lp" ? [(1 - cw) / 2, 1 - cw, (1 - cw) / 2] : [(1 + cw) / 2, -(1 + cw), (1 + cw) / 2];
+    return { b0: b[0] / a0, b1: b[1] / a0, b2: b[2] / a0, a1: (-2 * cw) / a0, a2: (1 - al) / a0 };
+  }
+  function runBiquad(f, x, reverse) {
+    const n = x.length;
+    let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+    for (let k = 0; k < n; k++) {
+      const i = reverse ? n - 1 - k : k, v = x[i];
+      const y = f.b0 * v + f.b1 * x1 + f.b2 * x2 - f.a1 * y1 - f.a2 * y2;
+      x2 = x1; x1 = v; y2 = y1; y1 = y; x[i] = y;
+    }
+  }
+
+  /** Shared STFT over a stereo pair; calls visit(frameIndex, Lre, Lim, Rre, Rim) per frame. */
+  function stereoStft(channels, sr) {
+    const n = channels[0].length;
+    const N = Math.max(512, nextPow2(Math.round(sr * 0.046))), hop = N >> 2, K = N / 2 + 1;
+    const pad = N, F = Math.ceil((n + N) / hop) + 1;
+    return { n, N, hop, K, pad, F, win: hann(N), fft: rfftFor(N) };
+  }
+  /** Per-bin pan (-1 hard left .. +1 hard right) and how much the bin acts like one panned source. */
+  function binPan(lr, li, rr, ri) {
+    const pl = lr * lr + li * li, pr = rr * rr + ri * ri, tot = pl + pr;
+    if (tot < 1e-18) return null;
+    const pan = (pr - pl) / tot;
+    // out-of-phase content (reverb, stereo wideners) has no single position; down-weight it
+    const cross = (lr * rr + li * ri) / Math.sqrt(pl * pr + 1e-30);
+    const coherent = Math.min(1, Math.max(0, (1 + cross) / 2 + Math.abs(pan)));
+    return { pan, coherent, tot };
+  }
+
+  /**
+   * Keep only what sits at one position in the stereo field. Each frequency bin of each
+   * frame is assigned a pan from the left/right level difference; bins near `target`
+   * (-1..1) pass and the rest fade out over `width`. The kept part keeps its own stereo image.
+   */
+  function panExtract(channels, sr, target, width) {
+    if (channels.length < 2) return channels;
+    const g = stereoStft(channels, sr), { n, N, hop, K, pad, F, win, fft } = g;
+    const [L, R] = channels, w = Math.max(0.03, width || 0.25), floor = 0.03;
+    const Lre = new Float64Array(K), Lim = new Float64Array(K), Rre = new Float64Array(K), Rim = new Float64Array(K);
+    const frame = new Float64Array(N);
+    const cut = (x, f) => { const o = f * hop - pad; for (let i = 0; i < N; i++) { const j = o + i; frame[i] = j >= 0 && j < n ? x[j] * win[i] : 0; } };
+    // pass 1: the mask
+    const M = new Float32Array(F * K);
+    for (let f = 0; f < F; f++) {
+      cut(L, f); fft.forward(frame, Lre, Lim);
+      cut(R, f); fft.forward(frame, Rre, Rim);
+      for (let k = 0; k < K; k++) {
+        const b = binPan(Lre[k], Lim[k], Rre[k], Rim[k]);
+        if (!b) { M[f * K + k] = floor; continue; }
+        const d = (b.pan - target) / w;
+        M[f * K + k] = Math.max(floor, Math.exp(-d * d) * b.coherent);
+      }
+    }
+    // pass 2: smooth the mask (3x3) and resynthesise both channels with it
+    const S = new Float32Array(F * K);
+    for (let f = 0; f < F; f++) for (let k = 0; k < K; k++) {
+      let sum = 0, cnt = 0;
+      for (let df = -1; df <= 1; df++) { const ff = f + df; if (ff < 0 || ff >= F) continue;
+        for (let dk = -1; dk <= 1; dk++) { const kk = k + dk; if (kk < 0 || kk >= K) continue; sum += M[ff * K + kk]; cnt++; } }
+      S[f * K + k] = sum / cnt;
+    }
+    const norm = new Float64Array(n);
+    for (let f = 0; f < F; f++) { const o = f * hop - pad; for (let i = 0; i < N; i++) { const j = o + i; if (j >= 0 && j < n) norm[j] += win[i] * win[i]; } }
+    const out = new Float64Array(N);
+    return [L, R].map((x) => {
+      const y = new Float32Array(n);
+      for (let f = 0; f < F; f++) {
+        cut(x, f); fft.forward(frame, Lre, Lim);
+        for (let k = 0; k < K; k++) { const m = S[f * K + k]; Lre[k] *= m; Lim[k] *= m; }
+        fft.inverse(Lre, Lim, out);
+        const o = f * hop - pad;
+        for (let i = 0; i < N; i++) { const j = o + i; if (j >= 0 && j < n) y[j] += out[i] * win[i]; }
+      }
+      for (let i = 0; i < n; i++) y[i] = norm[i] > 1e-9 ? y[i] / norm[i] : 0;
+      return y;
+    });
+  }
+
+  /** Where the energy sits across the stereo field: `bins` buckets from hard left to hard right. */
+  function panMap(channels, sr, bins) {
+    bins = bins || 41;
+    const hist = new Float64Array(bins);
+    if (channels.length < 2) return hist;
+    const g = stereoStft(channels, sr), { n, N, hop, K, pad, F, win, fft } = g;
+    const [L, R] = channels;
+    const Lre = new Float64Array(K), Lim = new Float64Array(K), Rre = new Float64Array(K), Rim = new Float64Array(K), frame = new Float64Array(N);
+    const cut = (x, f) => { const o = f * hop - pad; for (let i = 0; i < N; i++) { const j = o + i; frame[i] = j >= 0 && j < n ? x[j] * win[i] : 0; } };
+    const step = Math.max(1, Math.floor(F / 400));           // a few hundred frames is plenty for a picture
+    for (let f = 0; f < F; f += step) {
+      cut(L, f); fft.forward(frame, Lre, Lim);
+      cut(R, f); fft.forward(frame, Rre, Rim);
+      for (let k = 1; k < K; k++) {
+        const b = binPan(Lre[k], Lim[k], Rre[k], Rim[k]);
+        if (b) hist[Math.min(bins - 1, Math.floor(((b.pan + 1) / 2) * bins))] += b.tot * b.coherent;
+      }
+    }
+    return hist;
+  }
+
   /** Cancellation in dB from already-cut sections: level of the twins over level of the isolation. */
   function cancelDbOf(dst, src, iso) {
     let e1 = 0, e2 = 0, er = 0;
@@ -751,7 +900,8 @@
       const a = dst[c], b = src[c], r = iso[c];
       for (let i = 0; i < r.length; i++) { e1 += a[i] * a[i]; e2 += b[i] * b[i]; er += r[i] * r[i]; }
     }
-    return 10 * Math.log10((e1 + e2) / 2 / (er + 1e-20));
+    const db = 10 * Math.log10((e1 + e2) / 2 / (er + 1e-20));
+    return Number.isFinite(db) ? db : 0;
   }
 
   /**
@@ -833,7 +983,7 @@
   }
 
   return {
-    detectTwins, isolate, cancelDb, mono, DEFAULTS, probePair, cancelDbOf, denoise,
+    detectTwins, isolate, cancelDb, mono, DEFAULTS, probePair, cancelDbOf, denoise, stereoPart, bandLimit, panExtract, panMap,
     // pipeline steps (worker pool)
     prepare, features, lagRange, coarseScan, selectCandidates, analyseCandidate, explained, finalize,
     // internals exposed for tests

@@ -52,6 +52,7 @@
       <ul id="sessionList"></ul>
       <button class="tabs-arrow next" id="tabsNext" type="button" aria-label="Scroll songs right" tabindex="-1" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5L10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     </div>
+    <button class="add-song ghosty close-all" id="closeAll" type="button" title="Close all songs" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span class="lbl">Close all</span></button>
     <button class="add-song ghosty" id="settingsBtn" type="button" title="Settings" aria-expanded="false" aria-controls="settings"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h7M12.5 4.5h1M2.5 11.5h1M6.5 11.5h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="11" cy="4.5" r="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="5" cy="11.5" r="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/></svg><span class="lbl">Settings</span><span class="changed-dot" hidden></span></button>
     <button class="add-song" id="addSong" type="button" title="Add a song">
       <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
@@ -212,6 +213,40 @@
           </span>
           <p class="hint" id="cleanHint"></p>
         </div>
+        <div class="tune stereo" id="stereoRow">
+          <span class="label">Stereo</span>
+          <div class="seg" role="group" aria-label="Which part of the stereo image to keep">
+            <button type="button" data-part="full" aria-pressed="true" title="The whole stereo image">Full</button>
+            <button type="button" data-part="center" aria-pressed="false" title="Only what's panned to the middle">Center</button>
+            <button type="button" data-part="sides" aria-pressed="false" title="Only what differs between left and right">Sides</button>
+            <button type="button" data-part="position" aria-pressed="false" title="Only what sits at one position, left to right">Position</button>
+          </div>
+          <span class="busy-note" aria-hidden="true">Working…</span>
+          <div class="pan-pick" id="panPick" hidden>
+            <div class="pan-track">
+              <canvas id="panCanvas" aria-hidden="true"></canvas>
+              <input type="range" id="panPos" min="-100" max="100" step="1" value="0" aria-label="Stereo position to keep, from left to right" aria-valuetext="Center">
+            </div>
+            <div class="pan-ends" aria-hidden="true"><span>L</span><output id="panOut" for="panPos">Center</output><span>R</span></div>
+            <label class="pan-focus"><span>Focus</span>
+              <input type="range" id="panFocus" min="0" max="100" step="1" value="35" aria-label="How wide a slice of the stereo field to keep">
+              <output id="panFocusOut" for="panFocus">Medium</output>
+            </label>
+          </div>
+          <p class="hint" id="stereoHint"></p>
+        </div>
+        <div class="tune filter" id="filterRow">
+          <span class="label">Filter</span>
+          <label class="cut"><span>Low cut</span>
+            <input type="range" id="lowCut" min="0" max="100" step="1" value="0" aria-label="Low cut frequency">
+            <output id="lowCutOut" for="lowCut">Off</output>
+          </label>
+          <label class="cut"><span>High cut</span>
+            <input type="range" id="highCut" min="0" max="100" step="1" value="100" aria-label="High cut frequency">
+            <output id="highCutOut" for="highCut">Off</output>
+          </label>
+          <span class="busy-note" aria-hidden="true">Working…</span>
+        </div>
         <div class="export">
           <div class="crop-row">
             <label class="loop"><input type="checkbox" id="cropOn"><span class="switch" aria-hidden="true"></span> Crop</label>
@@ -299,7 +334,7 @@
   </main>
 
   <footer>
-    <p>Everything runs in this tab. Nothing is uploaded.</p>
+    <p>Everything runs on this device. Nothing is uploaded; songs stay in this browser until you close their tab.</p>
     <p class="install" id="install" hidden>
       <button class="link-btn" type="button" hidden>Install isol8. It works offline</button>
       <span class="install-note" hidden>To install on iPhone: Share, then Add to Home Screen. It works offline.</span>
@@ -307,6 +342,16 @@
   </footer>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <aside class="star-card" id="starNudge" aria-labelledby="starNudgeTitle" hidden>
+    <button class="star-x" id="starNudgeClose" type="button" aria-label="Close">&times;</button>
+    <p class="star-title" id="starNudgeTitle">Finding isol8 useful?</p>
+    <p class="star-body">It's free and open source. A star on GitHub helps other people find it.</p>
+    <div class="star-actions">
+      <a class="btn small primary" id="starNudgeGo" href="https://github.com/masonft/isol8" target="_blank" rel="noopener noreferrer"><span aria-hidden="true">&#9733;</span> Star on GitHub</a>
+      <button class="link-btn" id="starNudgeLater" type="button">Not now</button>
+    </div>
+  </aside>
 
   <script src="engine.js"></script>
   <script src="decode.js"></script>

@@ -171,7 +171,12 @@
       if (p && p.then) p.then(resolve, reject);
     });
     const channels = [];
-    for (let c = 0; c < audio.numberOfChannels; c++) channels.push(audio.getChannelData(c));
+    for (let c = 0; c < audio.numberOfChannels; c++) {
+      const d = audio.getChannelData(c);
+      // a damaged frame can decode to NaN/Infinity, which would poison every level measured over it
+      for (let i = 0; i < d.length; i++) if (!Number.isFinite(d[i])) d[i] = 0;
+      channels.push(d);
+    }
     return { channels, sampleRate: audio.sampleRate, format: info.format, rateKnown: !!info.sampleRate };
   }
 

@@ -34,6 +34,8 @@
     return `${m}:${sec}`;
   }
   const fmtInt = (n) => n.toLocaleString("en-US");
+  /** dB with one decimal; never prints NaN or Infinity. */
+  const fmtDb = (v) => (Number.isFinite(v) ? v.toFixed(1) : "–");
   const baseName = (name) => name.replace(/\.[^.]+$/, "");
 
   /** Content hash (two FNV-1a passes) used to recognise a song already in the session. */
@@ -109,14 +111,173 @@
     return parts.length ? { label: parts.join(", "), kbps: Math.round(kbps), codec } : null;
   }
 
+  // ------------------------------------------------------- saved sessions
+  // Songs and their results are kept in this browser (IndexedDB) so a reload, or the phone
+  // dropping the tab, doesn't mean analysing everything again. Nothing leaves the device.
+  const store = (() => {
+    let dbp = null;
+    const open = () => dbp || (dbp = new Promise((res, rej) => {
+      const r = indexedDB.open("isol8", 1);
+      r.onupgradeneeded = () => r.result.createObjectStore("tracks", { keyPath: "id" });
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    }).catch(() => null));
+    const tx = async (mode, fn) => {
+      const db = await open();
+      if (!db) return null;
+      return new Promise((res, rej) => {
+        const t = db.transaction("tracks", mode), req = fn(t.objectStore("tracks"));
+        t.oncomplete = () => res(req && req.result); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
+      });
+    };
+    return {
+      put: (rec) => tx("readwrite", (st) => st.put(rec)),
+      del: (id) => tx("readwrite", (st) => st.delete(id)),
+      all: () => tx("readonly", (st) => st.getAll()),
+    };
+  })();
+  const SAVED_FIELDS = ["id", "name", "file", "hash", "added", "status", "sr", "length", "format", "rateKnown", "quality", "opt",
+    "results", "debug", "elapsed", "error", "errorStage", "pick"];
+  let saveWarned = false;
+  function saveTrack(t) {
+    if (!t || t.removed || !window.indexedDB) return;
+    const rec = {};
+    for (const k of SAVED_FIELDS) if (t[k] !== undefined) rec[k] = t[k];
+    rec.results = (t.results || []).slice();       // the array itself (debug info is saved separately)
+    if (rec.status === "busy") rec.status = "queued";
+    store.put(rec).catch((err) => {
+      console.warn("Couldn't save", t.name, err);
+      if (!saveWarned) { saveWarned = true; toast("This browser is out of storage space, so some songs won't be kept after you close the page.", "warn"); }
+    });
+  }
+  function forgetTrack(id) { if (window.indexedDB) store.del(id).catch(() => {}); }
+  /* ---- star reminder: shown once, after someone has had real use out of the app ---- */
+  const STAR_KEY = "isol8-star", STAR_AFTER = { exports: 2, songs: 3 };
+  function starState() {
+    try { return JSON.parse(localStorage.getItem(STAR_KEY) || "null") || { songs: 0, exports: 0 }; }
+    catch { return null; } // no storage: never show it, or it would come back every visit
+  }
+  function noteUse(kind) {
+    const s = starState();
+    if (!s || s.done) return;
+    s[kind] = (s[kind] || 0) + 1;
+    const due = s.exports >= STAR_AFTER.exports || s.songs >= STAR_AFTER.songs;
+    if (due) s.done = true; // counts as shown even if they ignore it
+    try { localStorage.setItem(STAR_KEY, JSON.stringify(s)); } catch { return; }
+    if (due) setTimeout(showStarNudge, 4500); // after the "Saved." toast has gone
+  }
+  function showStarNudge() {
+    const n = $("starNudge");
+    n.hidden = false;
+    requestAnimationFrame(() => requestAnimationFrame(() => n.classList.add("show")));
+  }
+  function hideStarNudge() {
+    const n = $("starNudge");
+    if (n.hidden) return;
+    n.classList.remove("show");
+    setTimeout(() => { n.hidden = true; }, 320);
+  }
+  function bindStarNudge() {
+    $("starNudgeClose").addEventListener("click", hideStarNudge);
+    $("starNudgeLater").addEventListener("click", hideStarNudge);
+    $("starNudgeGo").addEventListener("click", () => setTimeout(hideStarNudge, 200));
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideStarNudge(); });
+  }
+
+  /* ---- warn before the page is closed with songs open ---- */
+  let inAppNavAt = 0;
+  function bindLeaveWarning() {
+    // a link to another isol8 page (How it works) isn't a real exit: songs come back on return
+    document.addEventListener("click", (e) => {
+      const a = e.target.closest && e.target.closest("a[href]");
+      if (a && a.origin === location.origin && !a.target && !a.hasAttribute("download")) inAppNavAt = Date.now();
+    }, true);
+    window.addEventListener("beforeunload", (e) => {
+      if (!state.tracks.length) return;
+      const working = state.tracks.some((t) => t.status === "busy" || t.status === "queued");
+      if (!working && Date.now() - inAppNavAt < 1500) return;
+      e.preventDefault();
+      e.returnValue = ""; // older browsers need this to show the prompt
+    });
+  }
+
+  function saveCurrent() { try { localStorage.setItem("isol8-current", state.current || ""); } catch { /* storage off */ } }
+
+  async function restoreSession() {
+    let recs;
+    try { recs = await store.all(); } catch { return; }
+    if (!recs || !recs.length || state.tracks.length) return;
+    recs.sort((a, b) => (a.added || 0) - (b.added || 0));
+    for (const r of recs) {
+      if (!r.file || state.tracks.some((t) => t.hash === r.hash)) continue;
+      const t = Object.assign({ results: [], progress: 0, stageText: "Waiting" }, r);
+      if (t.status === "queued") {
+        let buf;
+        try { buf = await t.file.arrayBuffer(); } catch { forgetTrack(t.id); continue; }
+        state.queue.push({ t, buf });
+      } else t.progress = 1;
+      state.tracks.push(t);
+    }
+    if (!state.tracks.length) return;
+    let want = null;
+    try { want = localStorage.getItem("isol8-current"); } catch { /* storage off */ }
+    const cur = state.tracks.find((t) => t.id === want) || state.tracks[state.tracks.length - 1];
+    state.current = cur.id;
+    state.selected = cur.status === "done" && cur.results.length ? cur.results[0].id : null;
+    renderAll();
+    if (cur.status === "done") ensureAudio(cur).then(() => { if (state.current === cur.id) { mapCache = null; renderAll(); } }, () => {});
+    pump();
+  }
+
   // ------------------------------------------------------------ session UI
   const track = () => state.tracks.find((t) => t.id === state.current);
   const result = () => track()?.results?.find((r) => r.id === state.selected);
 
   let tabsShown = null;   // track id last scrolled into view
+  /** Close every song. First click asks ("Close 3 songs?"), a second click within 4 s does it. */
+  let closeAllTimer = null;
+  function disarmCloseAll() {
+    const b = $("closeAll");
+    clearTimeout(closeAllTimer); closeAllTimer = null;
+    b.classList.remove("armed");
+    b.querySelector(".lbl").textContent = "Close all";
+    b.title = "Close all songs";
+    b.setAttribute("aria-label", "Close all songs");
+  }
+  function armedLabel() {
+    const b = $("closeAll"), n = state.tracks.length;
+    b.querySelector(".lbl").textContent = `Close ${n} songs?`;
+    b.setAttribute("aria-label", `Click again to close all ${n} songs`);
+  }
+  function closeAllClick() {
+    const b = $("closeAll");
+    if (state.tracks.length < 2) return;
+    if (!closeAllTimer) {
+      b.classList.add("armed");
+      b.title = "Click again to close every song";
+      armedLabel();
+      closeAllTimer = setTimeout(disarmCloseAll, 4000);
+      return;
+    }
+    disarmCloseAll();
+    const all = state.tracks.slice();
+    const working = all.some((t) => t.status === "busy");
+    for (const t of all) { t.removed = true; forgetTrack(t.id); audioCache.delete(t.id); probeCtx.delete(t.id); }
+    state.tracks.splice(0);
+    state.queue = [];
+    if (working && state.abortAnalysis) state.abortAnalysis();
+    stopPlayback(); pickStop();
+    pick.buf = null; pick.bufFor = null;
+    state.current = null; state.selected = null; state.showAll = false;
+    mapCache = null;
+    renderAll();
+  }
+
   function renderSession() {
     const nav = $("session"), ul = $("sessionList");
+    saveCurrent();
     nav.hidden = state.tracks.length === 0;
+    $("closeAll").hidden = state.tracks.length < 2;
+    if (closeAllTimer) { if (state.tracks.length < 2) disarmCloseAll(); else armedLabel(); }
     ul.replaceChildren(...state.tracks.map((t) => {
       const li = document.createElement("li");
       li.dataset.id = t.id;
@@ -219,6 +380,7 @@
       if (j < 0) return;
       t.removed = true;
       state.tracks.splice(j, 1);
+      forgetTrack(t.id);
       state.queue = state.queue.filter((q) => q.t !== t);
       if (t.status === "busy" && state.abortAnalysis) state.abortAnalysis();
       audioCache.delete(t.id);
@@ -267,8 +429,9 @@
         continue;
       }
       const t = { id: `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, name: file.name, file, hash,
-        status: "queued", results: [], progress: 0, stageText: "Waiting", opt: Object.assign({}, settings) };
+        status: "queued", results: [], progress: 0, stageText: "Waiting", opt: Object.assign({}, settings), added: Date.now() };
       state.tracks.push(t);
+      saveTrack(t);
       state.queue.push({ t, buf });
       // show the new song unless the user is busy listening to a finished one
       const cur = track();
@@ -307,6 +470,7 @@
       probeCtx.delete(t.id);
       t.elapsed = results.elapsedMs;
       t.status = "done";
+      noteUse("songs");
       if (t.id === state.current) {
         state.selected = results.length ? results[0].id : null;
         mapCache = null;
@@ -321,6 +485,7 @@
       toast(stage === "decode" ? `Couldn't read ${baseName(t.name)}. Try converting it to WAV or FLAC.`
         : `Analysing ${baseName(t.name)} failed. Try again, or lower "Candidates to check" if the browser ran out of memory.`, "error");
     }
+    saveTrack(t);
     state.busy = false;
     renderAll();
     pump();
@@ -561,7 +726,7 @@
       const len = document.createElement("span"); len.className = "len"; len.textContent = `${((p.dstEnd - p.dstStart) / sr).toFixed(1)} s`;
       times.append(ts, arrowSvg(), td, len);
       const db = document.createElement("span"); db.className = "db";
-      db.append(document.createTextNode(p.cancelDb.toFixed(1)));
+      db.append(document.createTextNode(fmtDb(p.cancelDb)));
       const u = document.createElement("small"); u.textContent = "dB"; db.append(u);
       const kind = document.createElement("span"); kind.className = "kind"; kind.textContent = kindOf(p);
       const bands = document.createElement("span"); bands.className = "bands";
@@ -573,7 +738,7 @@
         i.style.setProperty("--i", String(idx));
         bands.append(i);
       }
-      b.setAttribute("aria-label", `Result ${p.rank}: copied from ${fmtTime(p.srcStart / sr)} onto ${fmtTime(p.dstStart / sr)}, ${((p.dstEnd - p.dstStart) / sr).toFixed(1)} seconds, cancels by ${p.cancelDb.toFixed(1)} dB. ${kindOf(p)}.`);
+      b.setAttribute("aria-label", `Result ${p.rank}: copied from ${fmtTime(p.srcStart / sr)} onto ${fmtTime(p.dstStart / sr)}, ${((p.dstEnd - p.dstStart) / sr).toFixed(1)} seconds, cancels by ${fmtDb(p.cancelDb)} dB. ${kindOf(p)}.`);
       b.append(rank, times, db, kind, bands);
       b.addEventListener("click", () => { selectResult(p.id, "play"); wakeScope(); });
       li.append(b);
@@ -611,17 +776,18 @@
     ctx: null, nodes: null, playing: false, startedAt: 0, offset: 0,
     mode: "iso", key: null, buffers: null, iso: null, nudge: 0, best: null, duration: 0,
     blend: 1,            // 0 = twin, 1 = isolated (twin minus the whole copy)
-    clean: loadClean(),  // {noise, amount}: optional noise reduction of the isolation
+    clean: loadClean(),  // {noise, amount, stereo}: optional clean-up of the isolation (stereo isn't remembered between visits)
   };
   function loadClean() {
-    const def = { noise: false, amount: 0.5 };
+    // only noise reduction is remembered between visits; stereo and filter start fresh
+    const def = { noise: false, amount: 0.5, stereo: "full", pan: 0, focus: 0.25, low: 0, high: 0 };
     try {
       const v = JSON.parse(localStorage.getItem("isol8-clean"));
-      if (v && typeof v === "object") return { noise: !!v.noise, amount: Number.isFinite(v.amount) ? Math.max(0, Math.min(1, v.amount)) : def.amount };
+      if (v && typeof v === "object") return { ...def, noise: !!v.noise, amount: Number.isFinite(v.amount) ? Math.max(0, Math.min(1, v.amount)) : def.amount };
     } catch { /* storage off */ }
     return def;
   }
-  function saveClean() { try { localStorage.setItem("isol8-clean", JSON.stringify(player.clean)); } catch { /* storage off */ } }
+  function saveClean() { try { localStorage.setItem("isol8-clean", JSON.stringify({ noise: player.clean.noise, amount: player.clean.amount })); } catch { /* storage off */ } }
 
   function renderPlayer() {
     const p = result(), t = track();
@@ -659,13 +825,13 @@
     $("lagOut").textContent = `${fmtInt(lag)} (${(lag / p.sr).toFixed(4)} s)`;
     $("nudgeReset").hidden = player.nudge === 0;
     const db = player.best === null ? p.cancelDb : player.best;
-    $("fDb").textContent = `${db.toFixed(1)} dB`;
+    $("fDb").textContent = `${fmtDb(db)} dB`;
   }
 
   /** Shared by renderPlayer and play(), so a click that does both computes the buffers once. */
   function prepareBuffers() {
     const c = player.clean;
-    const tag = `${player.key}|${player.nudge}|${c.noise}|${c.noise ? c.amount : ""}`;
+    const tag = `${player.key}|${player.nudge}|${JSON.stringify(c)}`;
     if (player.prep && player.prep.tag === tag) return player.prep.promise;
     const promise = buildBuffers().finally(() => { if (player.prep && player.prep.promise === promise) player.prep = null; });
     player.prep = { tag, promise };
@@ -678,20 +844,36 @@
     if (player.key !== key || result() !== p) return;          // the selection moved on meanwhile
     const lag = currentLag();
     const s = Math.max(p.dstStart, lag), e = Math.min(p.dstEnd, ch[0].length);
-    const clean = Object.assign({}, player.clean);
+    const clean = Object.assign({}, player.clean), cleanTag = JSON.stringify(clean);
     const dst = ch.map((c) => c.subarray(s, e)), src = ch.map((c) => c.subarray(s - lag, e - lag));
-    if (clean.noise) { $("cleanHint").closest(".cleanup").classList.add("working"); await new Promise((r) => setTimeout(r, 30)); }
-    let iso = E.isolate(ch, lag, s, e);
-    if (clean.noise) iso = E.denoise(iso, dst, p.sr, clean.amount);
-    $("cleanHint").closest(".cleanup").classList.remove("working");
-    if (player.key !== key || result() !== p || currentLag() !== lag || player.clean.noise !== clean.noise || player.clean.amount !== clean.amount) return;
+    // the isolation + noise reduction is reused while only the stereo or filter settings change
+    const baseTag = `${key}|${lag}|${clean.noise}|${clean.noise ? clean.amount : ""}`;
+    const slow = (clean.noise && player.base?.tag !== baseTag) || clean.stereo === "position";
+    if (slow) { $("player").classList.add("working"); await new Promise((r) => setTimeout(r, 30)); }
+    let base = player.base?.tag === baseTag ? player.base : null;
+    if (!base) {
+      let iso = E.isolate(ch, lag, s, e);
+      if (clean.noise) iso = E.denoise(iso, dst, p.sr, clean.amount);
+      base = { tag: baseTag, iso, panMap: null };
+    }
+    let iso = base.iso;
+    if (clean.stereo === "position") {
+      if (!base.panMap) base.panMap = E.panMap(iso, p.sr, 61);
+      iso = E.panExtract(iso, p.sr, clean.pan, clean.focus);
+    } else iso = E.stereoPart(iso, clean.stereo);
+    iso = E.bandLimit(iso, p.sr, clean.low, clean.high);
+    $("player").classList.remove("working");
+    if (player.key !== key || result() !== p || currentLag() !== lag || JSON.stringify(player.clean) !== cleanTag) return;
+    player.base = base;
     player.iso = iso; player.dst = dst; player.src = src;
     player.span = [s, e];
     player.duration = (e - s) / p.sr;
     if (player.crop) setCrop(player.crop[0], player.crop[1]);   // the section can shrink when nudged
     player.buffers = null; // AudioBuffers are made lazily on play (needs a context)
-    player.best = player.nudge !== 0 || clean.noise ? E.cancelDbOf(dst, src, iso) : null;
+    const shaped = clean.noise || clean.stereo !== "full" || clean.low > 0 || clean.high > 0;
+    player.best = player.nudge !== 0 || shaped ? E.cancelDbOf(dst, src, iso) : null;
     renderCleanHint();
+    drawPanMap();
     player.spec = staticSpectrum(player.dst, player.iso, p.sr);
     updateAlignmentUi();
   }
@@ -940,7 +1122,75 @@
     else { renderBlend(); $("modeNote").textContent = modeNote(); applyGains(); }
   }
 
+  const STEREO_HINT = {
+    full: "",
+    center: "Center only: keeps what's panned to the middle, like most lead vocals and ad-libs, and drops stereo width and effects.",
+    sides: "Sides only: keeps what differs between left and right, like reverb, stereo effects and hard-panned parts. Centered sounds disappear.",
+    position: "Keeps only what sits at one spot between left and right. Each peak in the map is a sound; slide onto one, and narrow the focus to leave its neighbours out.",
+  };
+  function renderStereo() {
+    const t = track(), mono = !!(t && audioCache.get(t.id) && audioCache.get(t.id).length < 2);
+    document.querySelectorAll("#stereoRow .seg button").forEach((b) => {
+      b.setAttribute("aria-pressed", String(b.dataset.part === (mono ? "full" : player.clean.stereo)));
+      b.disabled = mono && b.dataset.part !== "full";
+    });
+    $("stereoHint").textContent = mono ? "This song is mono, so there's no center or sides to separate." : STEREO_HINT[player.clean.stereo];
+    $("panPick").hidden = mono || player.clean.stereo !== "position";
+    renderShapeOutputs();
+  }
+
+  // ------------------------------------------------- position and filter
+  const focusWidth = (v) => 0.06 + 0.54 * (v / 100);
+  const lowHz = (v) => (v <= 0 ? 0 : 20 * Math.pow(100, v / 100));          // off, 20 Hz .. 2 kHz
+  const highHz = (v) => (v >= 100 ? 0 : 500 * Math.pow(40, v / 100));       // 500 Hz .. 20 kHz, off
+  const fmtHz = (f) => (!f ? "Off" : f < 1000 ? `${Math.round(f)} Hz` : `${(f / 1000).toFixed(f < 10000 ? 1 : 0)} kHz`);
+  const fmtPan = (x) => (Math.abs(x) < 0.03 ? "Center" : `${Math.round(Math.abs(x) * 100)}% ${x < 0 ? "left" : "right"}`);
+  function renderShapeOutputs() {
+    const c = player.clean;
+    $("panOut").textContent = fmtPan(c.pan);
+    $("panPos").setAttribute("aria-valuetext", fmtPan(c.pan));
+    const fv = Number($("panFocus").value);
+    $("panFocusOut").textContent = fv < 25 ? "Narrow" : fv < 60 ? "Medium" : "Wide";
+    $("lowCutOut").textContent = fmtHz(c.low);
+    $("highCutOut").textContent = fmtHz(c.high);
+  }
+  /** The pan map: how much sound sits at each position, with the kept slice highlighted. */
+  function drawPanMap() {
+    const cv = $("panCanvas");
+    if ($("panPick").hidden) return;
+    const { w, h, dpr } = sizeCanvas(cv), g = cv.getContext("2d");
+    g.clearRect(0, 0, w, h);
+    const map = player.base && player.base.panMap;
+    const c = player.clean, xOf = (pan) => ((pan + 1) / 2) * w;
+    // the kept slice
+    const grad = g.createLinearGradient(xOf(c.pan - c.focus * 1.6), 0, xOf(c.pan + c.focus * 1.6), 0);
+    grad.addColorStop(0, `rgba(${P.lilac},0)`); grad.addColorStop(0.5, `rgba(${P.lilac},0.22)`); grad.addColorStop(1, `rgba(${P.lilac},0)`);
+    g.fillStyle = grad; g.fillRect(0, 0, w, h);
+    g.fillStyle = `rgba(${P.faint},0.6)`; g.fillRect(w / 2 - dpr / 2, 0, dpr, h);
+    if (!map) return;
+    let peak = 1e-20; for (const v of map) peak = Math.max(peak, v);
+    const bw = w / map.length;
+    for (let i = 0; i < map.length; i++) {
+      const v = Math.sqrt(map[i] / peak), bh = Math.max(1, v * (h - 6 * dpr));
+      const centre = -1 + ((i + 0.5) / map.length) * 2, d = (centre - c.pan) / Math.max(0.03, c.focus);
+      const inSlice = Math.exp(-d * d);
+      g.fillStyle = `rgba(${P.lilac},${0.25 + 0.65 * inSlice})`;
+      g.fillRect(i * bw + dpr, h - bh, Math.max(1, bw - 2 * dpr), bh);
+    }
+  }
+  /** Bound once: sliders preview as they move (outputs, map, spectrum shading) and rebuild when let go. */
+  function bindShapeSliders() {
+    const live = (id, key, map) => {
+      $(id).addEventListener("input", (e) => { player.clean[key] = map(Number(e.target.value)); renderShapeOutputs(); drawPanMap(); drawSpectrum(false); });
+      $(id).addEventListener("change", (e) => setClean(key, map(Number(e.target.value))));
+    };
+    live("panPos", "pan", (v) => v / 100);
+    live("panFocus", "focus", focusWidth);
+    live("lowCut", "low", lowHz);
+    live("highCut", "high", highHz);
+  }
   function renderCleanHint() {
+    renderStereo();
     $("cleanHint").textContent = player.clean.noise
       ? `Noise reduction at ${Math.round(player.clean.amount * 100)}%. Higher removes more of the leftover music, but can also soften quiet parts of the hidden sound.` : "";
   }
@@ -1212,6 +1462,14 @@
       const x = (Math.log(f / f0) / Math.log(f1 / f0)) * w;
       g.fillRect(x, h - 4 * dpr, dpr, 4 * dpr); g.fillText(lab, x + 3 * dpr, h - 1 * dpr);
     }
+    // shade what the filter removes
+    for (const [lo, hi] of [[f0, player.clean.low], [player.clean.high, f1]]) {
+      if (!(lo > 0) || !(hi > lo) || (hi === f1 && !player.clean.high) || (lo === f0 && !player.clean.low)) continue;
+      const xa = Math.max(0, (Math.log(Math.max(lo, f0) / f0) / Math.log(f1 / f0)) * w), xb = Math.min(w, (Math.log(Math.min(hi, f1) / f0) / Math.log(f1 / f0)) * w);
+      if (xb <= xa) continue;
+      g.fillStyle = `rgba(${P.bg},0.6)`; g.fillRect(xa, 0, xb - xa, h);
+      g.fillStyle = `rgba(${P.amber},0.8)`; g.fillRect(lo === f0 ? xb - dpr : xa, 0, dpr, h);
+    }
     const db = eI > 0 && eT > 1e-12 ? 10 * Math.log10(eT / eI) : null;
     $("specDb").textContent = db === null || !Number.isFinite(db) ? "" : `${live ? "cancelling" : "average"} ${db.toFixed(1)} dB${live ? " now" : ""}`;
   }
@@ -1263,6 +1521,18 @@
     });
   }
 
+  function shapeLabel() {
+    const c = player.clean, parts = [];
+    if (player.iso && player.iso.length > 1) {
+      if (c.stereo === "center" || c.stereo === "sides") parts.push(c.stereo);
+      if (c.stereo === "position") parts.push(`at ${fmtPan(c.pan)}`);
+    }
+    const hz = (f) => fmtHz(f).replace(" ", "");
+    if (c.low && c.high) parts.push(`${hz(c.low)}-${hz(c.high)}`);
+    else if (c.low) parts.push(`above ${hz(c.low)}`);
+    else if (c.high) parts.push(`below ${hz(c.high)}`);
+    return parts.length ? ` ${parts.join(" ")}` : "";
+  }
   /** Cut section-relative [a, b] seconds out, with 3 ms fades so the cut edges don't click. */
   function cropChannels(chs, [a, b], sr) {
     const i0 = Math.max(0, Math.round(a * sr)), i1 = Math.min(chs[0].length, Math.round(b * sr));
@@ -1301,7 +1571,7 @@
       if (!out) out = Isol8Export.encodeWav(chs, p.sr, fmt);
       const ext = fmt === "mp3" ? "mp3" : "wav";
       const where = `${fmtTime(p.srcStart / p.sr, 0).replace(":", "m")}s to ${fmtTime(p.dstStart / p.sr, 0).replace(":", "m")}s`;
-      const name = `isol8.it - ${baseName(t.name)} - #${p.rank} ${WHAT_LABEL[what]} (${where})${player.nudge ? ` nudged ${player.nudge > 0 ? "+" : ""}${player.nudge}` : ""}${player.clean.noise ? " denoised" : ""}${crop ? ` cropped ${cropLabel(crop, p)}` : ""}.${ext}`;
+      const name = `isol8.it - ${baseName(t.name)} - #${p.rank} ${WHAT_LABEL[what]} (${where})${player.nudge ? ` nudged ${player.nudge > 0 ? "+" : ""}${player.nudge}` : ""}${player.clean.noise ? " denoised" : ""}${shapeLabel()}${crop ? ` cropped ${cropLabel(crop, p)}` : ""}.${ext}`;
       const url = URL.createObjectURL(out.blob);
       const a = document.createElement("a");
       a.href = url; a.download = name;
@@ -1312,6 +1582,7 @@
       if (out.gainDb < -0.01) notes.push(`turned down by ${(-out.gainDb).toFixed(1)} dB so the peaks don't clip${fmt === "mp3" ? "" : `. Choose 32-bit float WAV to keep the exact level`}`);
       if (notes.length) toast(`Saved. ${notes.join("; ").replace(/^./, (c) => c.toUpperCase())}.`);
       else if (fmt !== "f32" || $("exportFormat").value === "f32") toast("Saved.");
+      noteUse("exports");
     } catch (err) {
       console.error(err);
       toast("Couldn't export this result.", "error");
@@ -1653,6 +1924,7 @@
     Object.assign(t, { status: "queued", results: [], progress: 0, stageText: "Waiting", opt: Object.assign({}, settings), debug: null, probe: null });
     state.selected = null; player.key = null;
     state.queue.push({ t, buf });
+    saveTrack(t);
     renderAll(); wakeScope(); pump();
   }
 
@@ -1721,7 +1993,7 @@
       const times = document.createElement("span"); times.className = "times";
       const a = document.createElement("span"); a.className = "t-src"; a.textContent = fmtTime(p.srcStart / p.sr);
       const b = document.createElement("span"); b.className = "t-dst"; b.textContent = fmtTime(p.dstStart / p.sr);
-      const len = document.createElement("span"); len.className = "len"; len.textContent = `${((p.dstEnd - p.dstStart) / p.sr).toFixed(1)} s · ${p.cancelDb.toFixed(1)} dB`;
+      const len = document.createElement("span"); len.className = "len"; len.textContent = `${((p.dstEnd - p.dstStart) / p.sr).toFixed(1)} s · ${fmtDb(p.cancelDb)} dB`;
       times.append(a, arrowSvg(), b, len);
       const w = document.createElement("span"); w.className = "why"; w.textContent = why;
       const add = document.createElement("button"); add.type = "button"; add.className = "btn ghost small"; add.textContent = "Add";
@@ -1737,6 +2009,7 @@
     if (!t.results.some((r) => r.id === id)) {
       p.id = id; p.rank = t.results.length + 1; p.manual = true;
       t.results.push(p);
+      saveTrack(t);
     }
     state.showAll = t.results.length > VISIBLE;
     mapCache = null;
@@ -1781,7 +2054,7 @@
     const off = r.lag - r.guess;
     if (Math.abs(off) > 0.9 * Number($("probeSearch").value || 1) * t.sr) out.push({ warn: true, text: `The best alignment landed near the edge of the search range (${(off / t.sr).toFixed(2)} s from your guess). Double-check the times or widen the search.` });
     if (r.cancelDb < 1 && !r.regions.length) {
-      out.push({ bad: true, text: `These two spans don't cancel (${r.cancelDb.toFixed(1)} dB at the best offset). They were probably played or recorded twice rather than copied, or one was processed differently.` });
+      out.push({ bad: true, text: `These two spans don't cancel (${fmtDb(r.cancelDb)} dB at the best offset). They were probably played or recorded twice rather than copied, or one was processed differently.` });
       return out;
     }
     // stage 1: coarse scan
@@ -1808,7 +2081,7 @@
           const dup = t.debug.stats.duplicates.find((d) => Math.abs(d.pair.lag - p.lag) <= 32);
           if (dup) out.push({ bad: true, text: `Region ${where} was merged as a duplicate: it sounds the same as #${dup.of.rank}. Raise "Duplicate strictness" to keep both.` });
           else if (t.debug.stats.cut.some((c) => Math.abs(c.lag - p.lag) <= 32)) out.push({ bad: true, text: `Region ${where} was cut by "Max results".` });
-          else out.push({ ok: true, text: `Region ${where} passes every filter with these settings (${p.cancelDb.toFixed(1)} dB, ${pctFmt(p.deep)} average).` });
+          else out.push({ ok: true, text: `Region ${where} passes every filter with these settings (${fmtDb(p.cancelDb)} dB, ${pctFmt(p.deep)} average).` });
         }
       }
     }
@@ -1838,7 +2111,7 @@
     grid.append(
       fact("Offset found", `${fmtInt(r.lag)}`),
       fact("From your guess", `${off >= 0 ? "+" : "−"}${fmtInt(Math.abs(off))} (${(off / t.sr).toFixed(3)} s)`),
-      fact("Cancels by", `${r.cancelDb.toFixed(1)} dB`),
+      fact("Cancels by", `${fmtDb(r.cancelDb)} dB`),
       fact("Similarity", `${r.sim.max.toFixed(2)} max · ${r.sim.mean.toFixed(2)} avg`),
     );
     const cv = document.createElement("canvas"); cv.className = "probe-chart"; cv.setAttribute("aria-label", "Cancelling share and similarity across the checked span");
@@ -2104,6 +2377,9 @@
     $("chooseFile").addEventListener("click", () => $("fileInput").click());
     $("addSong").addEventListener("click", () => $("fileInput").click());
     bindTabScroller();
+    bindStarNudge();
+    $("closeAll").addEventListener("click", closeAllClick);
+    bindLeaveWarning();
     $("fileInput").addEventListener("change", (e) => { addFiles([...e.target.files]); e.target.value = ""; wakeScope(); });
     // installed app: songs opened with isol8 from the OS ("Open with")
     if ("launchQueue" in window) {
@@ -2144,6 +2420,13 @@
     // rebuild once the slider is let go (a rebuild takes a moment on long sections)
     $("nrAmount").addEventListener("change", (e) => setClean("amount", e.target.value / 100));
     bindCrop();
+    bindShapeSliders();
+    document.querySelectorAll("#stereoRow .seg button").forEach((b) => b.addEventListener("click", () => {
+      if (b.disabled || player.clean.stereo === b.dataset.part) return;
+      setClean("stereo", b.dataset.part);
+      renderStereo();
+    }));
+    renderStereo();
     renderBlend();
     $("settingsToggle").addEventListener("click", () => toggleSettings());
     $("settingsBtn").addEventListener("click", () => toggleSettings());
@@ -2192,7 +2475,7 @@
       const sEl = document.createElement("span"); sEl.className = "s"; sEl.textContent = fmtTime(p.srcStart / sr);
       const dEl = document.createElement("span"); dEl.className = "d"; dEl.textContent = fmtTime(p.dstStart / sr);
       const small = document.createElement("small");
-      small.textContent = `${((p.dstEnd - p.dstStart) / sr).toFixed(1)} s · cancels ${p.cancelDb.toFixed(1)} dB · ${kindOf(p)}`;
+      small.textContent = `${((p.dstEnd - p.dstStart) / sr).toFixed(1)} s · cancels ${fmtDb(p.cancelDb)} dB · ${kindOf(p)}`;
       tip.append(b, sEl, " → ", dEl, small);
       tip.hidden = false;
       const x = Math.max(90, Math.min(sc.width - 90, e.clientX - sc.left));
@@ -2241,6 +2524,7 @@
 
   bind();
   renderAll();
+  restoreSession();
   scope.sleeping = false;
   requestAnimationFrame(scopeLoop);
 

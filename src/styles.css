@@ -624,6 +624,29 @@ main { max-width: var(--max); margin: 0 auto; padding: 0 var(--gutter) 48px; }
 .tune .reset:hover { text-decoration: underline; text-underline-offset: 3px; }
 .tune .hint { flex-basis: 100%; font-size: 12.5px; color: var(--text-3); margin: 0; }
 .tune.cleanup { gap: 10px 18px; }
+.seg { display: inline-flex; padding: 3px; border-radius: 999px; background: var(--well); border: 1px solid var(--line); }
+.seg button {
+  border: 0; background: transparent; padding: 6px 14px; border-radius: 999px; cursor: pointer;
+  font-size: 12.5px; font-weight: 500; color: var(--text-3); transition: color 0.2s, background 0.2s;
+}
+.seg button:hover { color: var(--text-2); }
+.seg button[aria-pressed="true"] { color: var(--lilac); background: var(--surface-3); box-shadow: inset 0 1px 0 var(--hl), 0 0 0 1px var(--line-2); }
+.seg button:disabled { opacity: 0.4; cursor: default; }
+.tune.stereo .hint:empty { display: none; }
+.busy-note { display: none; font-size: 12px; color: var(--amber); }
+.player.working .busy-note { display: inline; }
+.pan-pick { flex-basis: 100%; display: flex; flex-direction: column; gap: 6px; }
+.pan-pick[hidden] { display: none; }
+.pan-track { position: relative; height: 44px; border-radius: 10px; background: var(--well); border: 1px solid var(--line); overflow: hidden; }
+.pan-track canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.pan-track input[type="range"] { position: absolute; left: 8px; right: 8px; top: 50%; width: calc(100% - 16px); margin: -2px 0 0; background: transparent; }
+.pan-ends { display: flex; justify-content: space-between; font: 11.5px var(--mono); color: var(--text-3); padding: 0 4px; }
+.pan-ends output { color: var(--lilac); }
+.pan-focus, .cut { display: inline-flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--text-2); }
+.pan-focus input[type="range"], .cut input[type="range"] { flex: 1; min-width: 90px; margin: 0; }
+.pan-focus output, .cut output { font: 12px var(--mono); color: var(--text-2); min-width: 7ch; }
+.tune.filter { gap: 10px 22px; }
+.cut { flex: 1 1 200px; }
 .nr-amount { display: inline-flex; align-items: center; gap: 10px; flex: 1 1 180px; min-width: 160px; }
 .nr-amount[hidden] { display: none; }
 .nr-amount input[type="range"] { flex: 1; margin: 0; }
@@ -715,6 +738,32 @@ footer p { margin: 0; }
 .toast.warn::before { background: var(--amber); }
 .toast.error::before { background: var(--danger); }
 
+/* ------------------------------------------------------- star reminder */
+.star-card {
+  position: fixed; right: 24px; bottom: 24px; z-index: 49; width: min(340px, calc(100vw - 32px)); display: block;
+  background: var(--toast); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+  border: 1px solid var(--line-2); border-radius: 16px; padding: 16px 18px 16px;
+  box-shadow: 0 20px 50px var(--shadow);
+  opacity: 0; transform: translateY(16px) scale(0.97);
+  transition: opacity 0.3s var(--ease-out), transform 0.45s var(--ease-spring);
+}
+.star-card[hidden] { display: none; }
+.star-card.show { opacity: 1; transform: none; }
+.star-title { margin: 0 28px 4px 0; font-weight: 600; color: var(--text); }
+.star-body { margin: 0 0 14px; font-size: 14px; color: var(--text-2); line-height: 1.45; }
+.star-actions { display: flex; align-items: center; gap: 16px; }
+.star-actions .btn { display: inline-flex; white-space: nowrap; }
+.star-actions .link-btn { font-size: 14px; white-space: nowrap; }
+.star-x {
+  position: absolute; top: 8px; right: 8px; width: 30px; height: 30px; border-radius: 8px;
+  background: none; border: 0; color: var(--text-3); font-size: 20px; line-height: 1; cursor: pointer;
+}
+.star-x:hover { color: var(--text); background: var(--surface-2); }
+@media (max-width: 640px) {
+  .star-card { left: 16px; right: 16px; width: auto; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); }
+}
+@media (prefers-reduced-motion: reduce) { .star-card { transition: opacity 0.2s; transform: none; } }
+
 /* ------------------------------------------------------------- responsive */
 @media (max-width: 960px) {
   .bench { grid-template-columns: minmax(0, 1fr); grid-template-areas: "player" "results"; }
@@ -758,6 +807,10 @@ footer p { margin: 0; }
 .settings-link:hover, .settings-link[aria-expanded="true"] { color: var(--text); }
 .settings-link svg, .add-song.ghosty svg { width: 14px; height: 14px; }
 .add-song.ghosty { border-style: solid; border-color: var(--line); }
+.close-all[hidden] { display: none; }
+.add-song.close-all:hover { border-color: var(--line-3); background: var(--surface-2); }
+.add-song.close-all.armed { color: var(--danger); border-color: var(--danger); background: rgba(var(--rgb-danger), 0.08); }
+.session .add-song.close-all.armed .lbl { display: inline; } /* the question must show even where labels are hidden */
 .add-song.ghosty[aria-expanded="true"] { color: var(--text); border-color: var(--line-3); background: var(--surface-2); }
 .add-song.ghosty:hover svg { transform: none; }
 .changed-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 8px var(--amber); }

@@ -60,4 +60,27 @@ const t0 = sdrTone(leakIso), t1 = sdrTone(kept);
 console.log(`  sustained hidden tone: ${t0.toFixed(1)} dB before, ${t1.toFixed(1)} dB after`);
 assert(t1 > t0, "a sustained hidden sound should come out cleaner, not be removed");
 
+
+// stereo parts: center + sides add back up to the original, and each keeps the right sound
+{
+  const m = 2000, Lc = new Float32Array(m), Rc = new Float32Array(m);
+  for (let i = 0; i < m; i++) {
+    const mid = Math.sin(i * 0.05), wide = 0.5 * Math.sin(i * 0.13);
+    Lc[i] = mid + wide; Rc[i] = mid - wide;                    // a centered tone plus an out-of-phase one
+  }
+  const [cL, cR] = E.stereoPart([Lc, Rc], "center"), [sL, sR] = E.stereoPart([Lc, Rc], "sides");
+  let err = 0, midErr = 0, sideErr = 0;
+  for (let i = 0; i < m; i++) {
+    err = Math.max(err, Math.abs(cL[i] + sL[i] - Lc[i]), Math.abs(cR[i] + sR[i] - Rc[i]));
+    midErr = Math.max(midErr, Math.abs(cL[i] - Math.sin(i * 0.05)), Math.abs(cR[i] - cL[i]));
+    sideErr = Math.max(sideErr, Math.abs(sL[i] - 0.5 * Math.sin(i * 0.13)), Math.abs(sR[i] + sL[i]));
+  }
+  assert(err < 1e-6, "center + sides should rebuild the original");
+  assert(midErr < 1e-6, "center should hold just the centered tone, the same in both channels");
+  assert(sideErr < 1e-6, "sides should hold just the out-of-phase tone, inverted on the right");
+  const mono = [new Float32Array(10)];
+  assert(E.stereoPart(mono, "center") === mono, "mono passes through untouched");
+  console.log("  stereo center/sides split checks out");
+}
+
 console.log("cleanup tests passed");
