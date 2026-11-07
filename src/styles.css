@@ -207,6 +207,16 @@ a { color: inherit; }
 .nav a:hover { color: var(--text); }
 .nav a[aria-current="page"] { color: var(--text); background: var(--surface-3); box-shadow: inset 0 1px 0 var(--hl); }
 .header-tools { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; }
+/* Install offer, shown only when the browser can install isol8 (or on iOS, with instructions) */
+.install { position: relative; flex: none; }
+.install[hidden], .install [hidden] { display: none; }
+.install-btn { display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 14px 0 12px; border-radius: 999px; }
+.install-note {
+  position: absolute; top: calc(100% + 10px); right: 0; z-index: 30; width: max-content; max-width: min(280px, calc(100vw - 32px));
+  margin: 0; padding: 10px 13px; border-radius: 12px; font-size: 13px; line-height: 1.45; color: var(--text);
+  background: var(--toast); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+  border: 1px solid var(--line-2); box-shadow: 0 12px 32px -10px rgba(0, 0, 0, 0.5); animation: pop 0.3s var(--ease-out);
+}
 .icon-btn, .theme-toggle {
   position: relative; width: 38px; height: 38px; border-radius: 50%; flex: none;
   display: grid; place-items: center; cursor: pointer; color: var(--text-2);
@@ -720,7 +730,6 @@ main { max-width: var(--max); margin: 0 auto; padding: 0 var(--gutter) 48px; }
 /* ----------------------------------------------------------------- footer */
 footer { max-width: var(--max); margin: 0 auto; padding: 8px var(--gutter) 36px; color: var(--text-3); font-size: 13px; display: flex; flex-wrap: wrap; gap: 8px 28px; justify-content: space-between; }
 footer p { margin: 0; }
-.install[hidden], .install [hidden] { display: none; }
 .link-btn { background: none; border: 0; padding: 0; font: inherit; color: var(--cyan); cursor: pointer; }
 .link-btn:hover { text-decoration: underline; text-underline-offset: 3px; }
 
@@ -777,6 +786,8 @@ footer p { margin: 0; }
   .brand .wordmark { display: none; }
   .nav a { padding: 6px 11px; font-size: 13px; }
   .header-tools { gap: 6px; }
+  .install-btn { width: 38px; padding: 0; justify-content: center; }
+  .install-btn .lbl { display: none; }
   .session .add-song .lbl { display: none; }
   .session .add-song { padding: 9px 11px; position: relative; }
   .session .add-song .changed-dot { position: absolute; top: 5px; right: 5px; }
