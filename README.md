@@ -7,6 +7,10 @@
 <img alt="GitHub License" src="https://img.shields.io/github/license/masonft/isol8">
 </div>
 
+<div align="center">
+<a href="https://isol8.it" target="_blank">isol8.it</a>
+</div>
+
 # isol8
 A simple yet powerful tool to find hidden sounds in a song. No need to upload anything to a server.
 
