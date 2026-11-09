@@ -1613,6 +1613,27 @@
     g.stroke();
   }
 
+  // Where the idle waves sit relative to the hero copy. CSS sets --hero-stacked when the copy
+  // moves under the waves; otherwise the waves start just past the copy's measured right edge,
+  // so they never run under the text however wide the panel is. Cached per canvas width.
+  let heroLayout = null;
+  function heroWaveLayout(w, dpr) {
+    if (heroLayout && heroLayout.w === w) return heroLayout;
+    const sc = $("scope");
+    const stacked = getComputedStyle(sc).getPropertyValue("--hero-stacked").trim() === "1";
+    let x0 = w * 0.48;
+    if (!stacked) {
+      const left = sc.getBoundingClientRect().left, r = document.createRange();
+      let right = 0;
+      for (const el of $("dropPrompt").querySelectorAll("h1, .lede, .cta, .fmt, #settingsToggle")) {
+        r.selectNodeContents(el);
+        right = Math.max(right, r.getBoundingClientRect().right - left);
+      }
+      if (right > 0) x0 = Math.max(x0, (right + 48) * dpr);
+    }
+    return (heroLayout = { w, stacked, x0 });
+  }
+
   function drawInterference(g, w, h, dpr, now) {
     const t = reduceMotion ? 1.2 : now / 1000;
     const tr = track();
@@ -1620,10 +1641,11 @@
     let mis;
     if (scope.mode === "busy" && tr) mis = (1 - Math.min(1, tr.progress)) * 26 + 2;
     else mis = reduceMotion ? 14 : 14 + 13 * Math.sin(t * 0.45);
-    const narrow = w < 700 * dpr, idle = scope.mode !== "busy";
-    // on narrow screens the copy sits at the bottom, so the waves stay in the top band
+    const idle = scope.mode !== "busy", hero = idle ? heroWaveLayout(w, dpr) : null;
+    const narrow = idle && hero.stacked;
+    // stacked: the copy sits at the bottom, so the waves stay in the top band
     const mid = h * (idle ? (narrow ? 0.11 : 0.5) : 0.4), amp = h * (idle && narrow ? 0.06 : 0.2);
-    const x0 = idle && !narrow ? w * 0.48 : 0;
+    const x0 = idle && !narrow ? hero.x0 : 0;
     const lines = [
       { col: `rgba(${P.amber},0.9)`, f: (x) => wavePair(x / dpr, t), y: mid - amp * 0.05 },
       { col: `rgba(${P.cyan},0.9)`, f: (x) => -wavePair(x / dpr + mis, t), y: mid + amp * 0.05 },
