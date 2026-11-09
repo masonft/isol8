@@ -10,7 +10,10 @@
 # isol8
 A simple yet powerful tool to find hidden sounds in a song. No need to upload anything to a server.
 
+**This is NOT just another vocal remover.**
+
 ## Features
+- Works like no other tool available
 - Automatic segment detection
 - Waveform and section visualisation
 - Process results even further:
@@ -18,7 +21,7 @@ A simple yet powerful tool to find hidden sounds in a song. No need to upload an
   - Noise reduction
   - Crop/shorten
   - EQ with low & high cut  
-- Save results
+- Save results locally
 - Crossfade between the result and the original section for comparison
 - Adjust parameters (for advanced users)
 
@@ -39,7 +42,12 @@ isol8 finds those repeats automatically and lets you listen to and download what
 ### Doesn't this already exist?
 I wasn't able to find an existing tool that uses this method in the same way.
 
-However by the time I'd already published this project I did stumble upon a research paper with a similar concept called **[]()**
+However after I'd already published this project I did stumble upon a research paper with a similar concept called **[REPET for Background/Foreground Separation in Audio](https://interactiveaudiolab.github.io/assets/papers/Rafii-Liutkus-Pardo%20-%20REPET%20for%20Background-Foreground%20Separation%20in%20Audio%20-%20Springer%202014.pdf)**. This is the closest thing I could find to my project.
+
+As far as I could tell, REPET uses estimated masks to filter out the background, which isn't nearly as effective but works with a lot more songs and doesn't require near-identical sections. isol8 performs an exact cancellation on the repeating parts, resulting in a more precise isolation when it does work.
+
+### Does it need a lot of processing power?
+Nope not at all. I will add benchmarks at a later date.
 
 ## Run locally
 
