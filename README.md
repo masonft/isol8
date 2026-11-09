@@ -18,6 +18,24 @@ A simple yet powerful tool to find hidden sounds in a song. No need to upload an
 
 **This is NOT just another vocal remover.** It's the first of its kind.
 
+<details>
+<summary><b>Contents</b></summary>
+
+- [Features](#features)
+- [Screenshots](#screenshots)
+- [How it works](#how-it-works)
+- [Limitations](#limitations)
+- [FAQ](#faq)
+  - [Doesn't this already exist?](#doesnt-this-already-exist)
+  - [Does it need a lot of processing power?](#does-it-need-a-lot-of-processing-power)
+- [Run locally](#run-locally)
+- [Deploy](#deploy)
+- [Project layout](#project-layout)
+- [Tests](#tests)
+- [License](#license)
+
+</details>
+
 ## Features
 - Works like no other tool available
 - Automatic segment detection
