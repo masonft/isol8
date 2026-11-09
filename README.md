@@ -7,6 +7,8 @@
 <img alt="GitHub License" src="https://img.shields.io/github/license/masonft/isol8">
 </div>
 
+<br>
+
 <div align="center">
 <a href="https://isol8.it" target="_blank">isol8.it</a>
 </div>
