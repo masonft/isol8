@@ -58,7 +58,9 @@ However after I'd already published this project I did stumble upon a research p
 As far as I could tell, REPET uses estimated masks to filter out the background, which isn't nearly as effective but works with a lot more songs and doesn't require near-identical sections. isol8 performs an exact cancellation on the repeating parts, resulting in a more precise isolation when it does work.
 
 ### Does it need a lot of processing power?
-Nope not at all. I will add benchmarks at a later date.
+Nope not at all. I imagine it'll run fine on most modern consumer hardware.
+
+I will add benchmarks at a later date.
 
 ## Run locally
 
