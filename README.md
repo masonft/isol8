@@ -16,7 +16,7 @@
 # isol8
 A simple yet powerful tool to find hidden sounds in a song. No need to upload anything to a server.
 
-**This is NOT just another vocal remover.**
+**This is NOT just another vocal remover.** It's the first of its kind.
 
 ## Features
 - Works like no other tool available
@@ -30,6 +30,11 @@ A simple yet powerful tool to find hidden sounds in a song. No need to upload an
 - Save results locally
 - Crossfade between the result and the original section for comparison
 - Adjust parameters (for advanced users)
+
+
+## Screenshots
+
+<img src="docs/screenshots/interface.png" />
 
 ## How it works
 When a song reuses a section, such as a chorus, flipping one copy upside down over the other cancels everything they share. Whatever is left over, like an extra ad-lib or a layer you'd never notice, is what will be returned.
