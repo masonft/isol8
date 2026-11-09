@@ -10,7 +10,7 @@
 <br>
 
 <div align="center">
-<a href="https://isol8.it" target="_blank">isol8.it</a>
+<b><a href="https://isol8.it" target="_blank">isol8.it</a></b>
 </div>
 
 # isol8
