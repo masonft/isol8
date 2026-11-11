@@ -24,13 +24,13 @@ const APP = path.join(__dirname, "..", "src");
 const args = process.argv.slice(2);
 const shotsIdx = args.indexOf("--shots");
 const SHOTS = shotsIdx >= 0 ? args[shotsIdx + 1] : null;
-const EX = require("./examples.js")(args.find((a, i) => !a.startsWith("--") && i !== shotsIdx + 1));
-if (!EX) { console.error("e2e needs the example songs (see tests/examples.js)"); process.exit(1); }
-const GT = {
-  "dont panic": [{ lag: 2399040, tol: 0 }, { lag: 1128960, tol: 0 }],
-  "nobody": [{ lag: 3444559, tol: 0 }],
-  "the band": [{ lag: 3050648, tol: 1 }],
-};
+const examples = require("./examples.js");
+// which songs there are, and what was found in each by hand, comes from examples.json
+const SONGS = examples.songs(examples(args.find((a, i) => !a.startsWith("--") && i !== shotsIdx + 1))).filter((s) => s.e2e !== false);
+if (!SONGS.length) { console.error("e2e needs the example songs (see tests/examples.js)"); process.exit(1); }
+const MAIN = SONGS.find((s) => s.main);                       // the lossless song looked at closely
+const MAIN_NAME = MAIN && path.basename(MAIN.file), MAIN_LAG = MAIN && MAIN.truths[0].lag;
+const chipOf = (s) => `.chip:has-text(${JSON.stringify(path.basename(s.file).replace(/\.[^.]+$/, ""))})`;
 // The only request allowed off-site: the star count. Mocked so the tests never touch the network.
 const GH_API = "https://api.github.com/repos/masonft/isol8";
 const mockGitHub = (pg, status, stars) => pg.route(`${GH_API}*`, (r) => r.fulfill({
@@ -65,14 +65,12 @@ function serve() {
   await page.goto(base);
   if (SHOTS) { await page.waitForTimeout(600); await page.screenshot({ path: path.join(SHOTS, "desktop-empty.png") }); }
 
-  const songs = Object.keys(GT).filter((s) => fs.existsSync(path.join(EX, s)));
-  for (const song of songs) {
-    const dir = path.join(EX, song);
-    const file = path.join(dir, fs.readdirSync(dir).find((f) => /\.(mp3|flac|wav|m4a)$/i.test(f)));
+  for (const entry of SONGS) {
+    const song = entry.dir, file = entry.file;
     console.log(`\n${song}`);
     const t0 = Date.now();
     await page.setInputFiles("#fileInput", file);
-    if (SHOTS && song === songs[0]) { await page.waitForTimeout(1500); await page.screenshot({ path: path.join(SHOTS, "desktop-busy.png") }); }
+    if (SHOTS && entry === SONGS[0]) { await page.waitForTimeout(1500); await page.screenshot({ path: path.join(SHOTS, "desktop-busy.png") }); }
     await page.waitForFunction((n) => { const t = window.__isol8.state.tracks.find((t) => t.name === n); return t && (t.status === "done" || t.status === "error"); },
       path.basename(file), { timeout: 240000 });
     const info = await page.evaluate((n) => {
@@ -81,8 +79,8 @@ function serve() {
         results: t.results.map((r) => ({ lag: r.lag, dstStart: r.dstStart, dstEnd: r.dstEnd, rank: r.rank, id: r.id })) };
     }, path.basename(file));
     check(info.status === "done", `analysed in ${((Date.now() - t0) / 1000).toFixed(1)}s wall (${(info.elapsed / 1000).toFixed(1)}s analysis), ${info.results.length} results, ${info.sr} Hz`);
-    for (const g of GT[song]) {
-      const m = info.results.find((r) => Math.abs(r.lag - g.lag) <= g.tol);
+    for (const g of entry.truths) {
+      const m = info.results.find((r) => Math.abs(r.lag - g.lag) <= (g.lagTolerance || 0));
       check(!!m, `your offset ${g.lag} found${m ? ` as #${m.rank} (lag ${m.lag})` : ""}`);
     }
     // duplicates among listed results
@@ -95,7 +93,7 @@ function serve() {
     const warned = await page.evaluate(() => !document.getElementById("quality").hidden);
     check(!warned, "no low-quality warning for a lossless or 320 kbps file");
 
-    if (song === "the band") {
+    if (entry === MAIN) {
       // lossless native-rate decode: every browser sample must map back to the exact 16-bit
       // integer in the file. (Chromium scales positive samples by 1/32767 and negative by
       // 1/32768; the mapping is one-to-one, so identical samples still cancel exactly.)
@@ -116,7 +114,7 @@ function serve() {
       check(exact, `browser decode is lossless at native ${got.sr} Hz, not resampled (${got.len} samples, each maps back to its 16-bit value)`);
 
       // export: select the result matching the example, download float WAV, compare
-      const m = info.results.find((r) => Math.abs(r.lag - 3050648) <= 1);
+      const m = info.results.find((r) => Math.abs(r.lag - MAIN_LAG) <= 1);
       await page.click(`.result[data-id="${m.id}"]`);
       await page.waitForTimeout(600);
       check(await page.getAttribute("#playBtn", "aria-label") === "Pause", "clicking a result starts playing it");
@@ -216,16 +214,16 @@ function serve() {
     await mob.goto(base);
     await mob.waitForTimeout(500);
     await mob.screenshot({ path: path.join(SHOTS, "mobile-empty.png") });
-    const f = path.join(EX, "dont panic", fs.readdirSync(path.join(EX, "dont panic")).find((f) => f.endsWith(".mp3")));
+    const f = (SONGS.find((s) => s.file.endsWith(".mp3")) || SONGS[0]).file;
     await mob.setInputFiles("#fileInput", f);
     await mob.waitForFunction(() => window.__isol8.state.tracks[0]?.status === "done", null, { timeout: 240000 });
     await mob.waitForTimeout(1200);
     await mob.screenshot({ path: path.join(SHOTS, "mobile-results.png"), fullPage: true });
   }
 
-  // debug tools on The Band: pipeline, probing your example, adding a hidden result
-  if (fs.existsSync(path.join(EX, "the band"))) {
-    await page.click('.chip:has-text("The Band")');
+  // debug tools on the main song: pipeline, probing your example, adding a hidden result
+  if (MAIN) {
+    await page.click(chipOf(MAIN));
     await page.waitForTimeout(300);
     await page.click("#debug summary");
     const steps = await page.$$eval("#pipeline li", (v) => v.length);
@@ -233,7 +231,7 @@ function serve() {
     // mark the pair by hand on the song picker: drag the copy, click the twin's start
     await page.locator("#pickWrap").scrollIntoViewIfNeeded();
     const pb = await page.locator("#pickWrap").boundingBox();
-    const dur = await page.evaluate(() => { const t = window.__isol8.state.tracks.find((t) => /Band/.test(t.name)); return t.length / t.sr; });
+    const dur = await page.evaluate((n) => { const t = window.__isol8.state.tracks.find((t) => t.name === n); return t.length / t.sr; }, MAIN_NAME);
     const X = (sec) => pb.x + (sec / dur) * pb.width, Y = pb.y + pb.height / 2;
     await page.mouse.click(X(60), Y); await page.waitForTimeout(400);
     check(await page.getAttribute("#pickPlay", "aria-label") === "Pause", "clicking the song picker in Listen mode plays from there");
@@ -247,26 +245,26 @@ function serve() {
     await page.waitForSelector(".verdict", { timeout: 60000 });
     const v = await page.$$eval(".verdict", (x) => x.map((e) => e.textContent));
     const lagTxt = await page.textContent(".probe-facts dd");
-    check(/Already in the results as #\d+/.test(v[0]) && Math.abs(Number(lagTxt.replace(/,/g, "")) - 3050648) <= 1, `probe of your example locks lag ${lagTxt} and reports "${v[0]}"`);
-    const before = await page.evaluate(() => window.__isol8.state.tracks.find((t) => /Band/.test(t.name)).results.length);
+    check(/Already in the results as #\d+/.test(v[0]) && Math.abs(Number(lagTxt.replace(/,/g, "")) - MAIN_LAG) <= 1, `probe of your example locks lag ${lagTxt} and reports "${v[0]}"`);
+    const before = await page.evaluate((n) => window.__isol8.state.tracks.find((t) => t.name === n).results.length, MAIN_NAME);
     const hasHidden = await page.$("#hiddenList .btn");
     if (hasHidden) {
       await hasHidden.click(); await page.waitForTimeout(500);
-      const after = await page.evaluate(() => window.__isol8.state.tracks.find((t) => /Band/.test(t.name)).results.length);
+      const after = await page.evaluate((n) => window.__isol8.state.tracks.find((t) => t.name === n).results.length, MAIN_NAME);
       check(after === before + 1 && await page.getAttribute("#playBtn", "aria-label") === "Pause", "adding a hidden result lists it and plays it");
     }
     // settings reach the analysis: re-analyse with a lower result limit
     await page.click("#settingsBtn");
     await page.fill("#set-maxResults", "10"); await page.dispatchEvent("#set-maxResults", "input");
     await page.click("#reanalyse");
-    await page.waitForFunction(() => { const t = window.__isol8.state.tracks.find((t) => /Band/.test(t.name)); return t.status === "done" && t.debug && t.debug.opt.maxResults === 10; }, null, { timeout: 240000 });
-    const re = await page.evaluate(() => { const t = window.__isol8.state.tracks.find((t) => /Band/.test(t.name)); return { n: t.results.length, max: t.debug.opt.maxResults, lag: t.results.some((r) => Math.abs(r.lag - 3050648) <= 1) }; });
+    await page.waitForFunction((n) => { const t = window.__isol8.state.tracks.find((t) => t.name === n); return t.status === "done" && t.debug && t.debug.opt.maxResults === 10; }, MAIN_NAME, { timeout: 240000 });
+    const re = await page.evaluate(({ n, lag }) => { const t = window.__isol8.state.tracks.find((t) => t.name === n); return { n: t.results.length, max: t.debug.opt.maxResults, lag: t.results.some((r) => Math.abs(r.lag - lag) <= 1) }; }, { n: MAIN_NAME, lag: MAIN_LAG });
     check(re.n === 10 && re.max === 10 && re.lag, `re-analysing with Max results 10 gives ${re.n} results, your example still among them`);
     await page.click("#settingsReset"); await page.click("#settingsClose");
   }
 
   // low-quality warning: a 128 kbps MP3 made from one of the lossless examples
-  const flac = path.join(EX, "nobody", fs.readdirSync(path.join(EX, "nobody")).find((f) => f.endsWith(".flac")));
+  const flac = (SONGS.find((s) => s !== MAIN && s.file.endsWith(".flac")) || SONGS.find((s) => s.file.endsWith(".flac"))).file;
   const lq = path.join(require("os").tmpdir(), "isol8 low quality.mp3");
   execFileSync("ffmpeg", ["-v", "error", "-y", "-t", "60", "-i", flac, "-b:a", "128k", lq]);
   await page.setInputFiles("#fileInput", lq);
@@ -291,7 +289,7 @@ function serve() {
       n: window.__isol8.state.tracks.find((t) => t.name === "isol8 no repeats.wav").results.length }));
     check(e.n === 0 && e.shown && /Not every song works/.test(e.text) && !e.player && e.solo, `no repeats: 0 results, "Not every song works" shown full width, no player`);
     if (SHOTS) await page.screenshot({ path: path.join(SHOTS, "no-results.png"), fullPage: true });
-    await page.click('.chip:has-text("The Band")'); await page.waitForTimeout(300);
+    await page.click(chipOf(MAIN)); await page.waitForTimeout(300);
   }
 
   // regression: clicking the waveform during the isolation sequence must not freeze it

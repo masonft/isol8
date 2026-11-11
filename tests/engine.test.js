@@ -2,19 +2,13 @@
  * Engine regression test against the hand-made examples.
  *   node tests/engine.test.js [path/to/examples]
  * Needs ffmpeg on PATH (only to decode audio in Node; the browser uses Web Audio).
- * Ground truth = offsets/regions reverse-engineered from the hand-made step files.
+ * Ground truth = offsets/regions reverse-engineered from the hand-made step files, listed in
+ * examples.json next to the songs (see tests/examples.js).
  */
 const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const E = require("../src/engine.js");
-
-const GROUND_TRUTH = [
-  { song: "dont panic", lag: 2399040, resStart: 4095417, resLen: 1243620 },
-  { song: "dont panic", lag: 1128960, resStart: 6845159, resLen: 1128960 },
-  { song: "nobody", lag: 3444559, resStart: 4428764, resLen: 1474945 },
-  { song: "the band", lag: 3050648, resStart: 3946627, resLen: 1126785, lagTolerance: 1 }, // true optimum sits between samples
-];
 
 function decode(file) {
   const probe = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-select_streams", "a:0", "-show_entries",
@@ -29,15 +23,13 @@ function decode(file) {
   return { ch, sr };
 }
 
-const root = require("./examples.js")(process.argv[2]);
-if (!root) { console.log("engine tests skipped: example songs not found (see tests/examples.js)"); process.exit(0); }
+const examples = require("./examples.js");
+const SONGS = examples.songs(examples(process.argv[2]));
+if (!SONGS.length) { console.log("engine tests skipped: example songs not found (see tests/examples.js)"); process.exit(0); }
 let fails = 0;
 const fail = (m) => { fails++; console.log("  FAIL", m); };
-for (const song of [...new Set(GROUND_TRUTH.map((g) => g.song))]) {
-  const dir = path.join(root, song);
-  if (!fs.existsSync(dir)) { console.log(`skip ${song} (not found)`); continue; }
-  const file = fs.readdirSync(dir).find((f) => /\.(mp3|flac|wav|m4a|ogg|aiff?)$/i.test(f));
-  const { ch, sr } = decode(path.join(dir, file));
+for (const { dir: song, file, truths } of SONGS) {
+  const { ch, sr } = decode(file);
   const t = Date.now();
   const res = E.detectTwins(ch, sr);
   console.log(`\n${song}: ${res.length} results in ${((Date.now() - t) / 1000).toFixed(1)}s`);
@@ -48,13 +40,15 @@ for (const song of [...new Set(GROUND_TRUTH.map((g) => g.song))]) {
     const a = res[i], b = res[j];
     if (Math.abs(a.lag - b.lag) <= 32 && Math.min(a.dstEnd, b.dstEnd) > Math.max(a.dstStart, b.dstStart)) fail(`duplicate results #${a.rank} and #${b.rank}`);
   }
-  for (const g of GROUND_TRUTH.filter((g) => g.song === song)) {
+  for (const g of truths) {
     const tol = g.lagTolerance || 0;
     const m = all.find((p) => Math.abs(p.lag - g.lag) <= tol &&
       Math.min(p.dstEnd, g.resStart + g.resLen) > Math.max(p.dstStart, g.resStart));
     if (!m) { fail(`ground truth lag ${g.lag} not found`); continue; }
     const cov = (Math.min(m.dstEnd, g.resStart + g.resLen) - Math.max(m.dstStart, g.resStart)) / g.resLen;
-    console.log(`  ✓ your example lag ${g.lag}: found as #${m.rank} lag ${m.lag} (err ${m.lag - g.lag}) coverage ${(cov * 100).toFixed(0)}%`);
+    if (!!g.partial !== !!m.partial) fail(`lag ${g.lag} should ${g.partial ? "" : "not "}be a shared-layer result`);
+    if (g.minCoverage && cov < g.minCoverage) fail(`lag ${g.lag} only covers ${(cov * 100).toFixed(0)}% of the hand-made result`);
+    console.log(`  ✓ your example lag ${g.lag}: found as #${m.rank} lag ${m.lag} (err ${m.lag - g.lag}) coverage ${(cov * 100).toFixed(0)}%${m.partial ? " (shared layer)" : ""}`);
   }
   // isolate() equals the technique
   const p = res[0], iso = E.isolate(ch, p.lag, p.dstStart, p.dstStart + 1000);

@@ -111,7 +111,7 @@ npm i && npx playwright install chromium
 npm run test:e2e                                # real browser
 ```
 
-Some tests check results against songs I isolated by hand. Those songs aren't in the repo. Put them in `../isol8-examples`, or set `ISOL8_EXAMPLES` to their folder. Without them, those tests are skipped, except the browser test, which needs them.
+Some tests check results against songs I isolated by hand. Those songs aren't in the repo. Put them in `../isol8-examples`, or set `ISOL8_EXAMPLES` to their folder. The folder also needs an `examples.json` listing the songs and what was found in each (format in `tests/examples.js`). Without them, those tests are skipped, except the browser test, which needs them.
 
 ## License
 

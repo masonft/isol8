@@ -8,15 +8,15 @@ const fs = require("fs");
 const path = require("path");
 const E = require("../src/engine.js");
 
-const EX = require("./examples.js")(process.argv[2]);
-if (!EX || !fs.existsSync(path.join(EX, "the band"))) { console.log("probe tests skipped: example songs not found (see tests/examples.js)"); process.exit(0); }
-const dir = path.join(EX, "the band");
-const file = path.join(dir, fs.readdirSync(dir).find((f) => f.endsWith(".flac")));
+const examples = require("./examples.js");
+const main = examples.songs(examples(process.argv[2])).find((s) => s.main);
+if (!main) { console.log("probe tests skipped: example songs not found (see tests/examples.js)"); process.exit(0); }
+const file = main.file;
 const raw = execFileSync("ffmpeg", ["-v", "error", "-i", file, "-f", "f32le", "-ac", "2", "-"], { maxBuffer: 1 << 30 });
 const inter = new Float32Array(raw.buffer, raw.byteOffset, raw.length / 4);
 const n = inter.length / 2, ch = [new Float32Array(n), new Float32Array(n)];
 for (let i = 0; i < n; i++) { ch[0][i] = inter[2 * i]; ch[1][i] = inter[2 * i + 1]; }
-const sr = 44100, LAG = 3050648, DST = 3946627;
+const sr = 44100, LAG = main.truths[0].lag, DST = main.truths[0].resStart;
 
 let fails = 0;
 const check = (c, m) => { console.log(`  ${c ? "✓" : "✗ FAIL"} ${m}`); if (!c) fails++; };

@@ -59,6 +59,7 @@
   }
 
   function kindOf(p) {
+    if (p.partial) return "Cancels a shared layer";
     const upper = (p.bands[1] + p.bands[2] + p.bands[3]) / 3;
     if (p.bands[1] < 0.15 && p.bands[2] < 0.15 && p.bands[3] < 0.15) return "Cancels the low end";
     if (upper >= 0.4) return "Cancels most of the mix";
@@ -542,7 +543,7 @@
       await new Promise((r) => setTimeout(r, 30));
       const ctx = E.prepare(channels, sr, opt), f = E.features(ctx), [l0, l1] = E.lagRange(ctx);
       const raw = E.coarseScan(f, sr, ctx.opt, l0, l1);
-      const cands = E.selectCandidates(raw, f.hop, ctx.opt);
+      const cands = E.selectCandidates(raw, f.hop, ctx.opt, sr);
       const found = [];
       cands.forEach((c) => found.push(...E.analyseCandidate(ctx, c)));
       const stats = {};
@@ -615,7 +616,7 @@
           raw.push(...m.raw);
         }
       }));
-      const cands = E.selectCandidates(raw, hop, opt);
+      const cands = E.selectCandidates(raw, hop, opt, sr);
 
       // sample-exact lock + region measurement per candidate
       const found = [];
@@ -1854,6 +1855,15 @@
       hint: "Short dips inside a result are joined over instead of splitting it." },
     { key: "zoneThr", label: "Other-zone similarity", min: 0.4, max: 0.95, step: 0.01, fmt: (v) => v.toFixed(2),
       hint: "Once an offset is locked, other places that look this alike at the same offset are checked too." },
+    { group: "Shared layers", note: "Two passages can share only part of the mix, like the same beat under different vocals. They never cancel deeply, so they are found by how much of the mix is the same recording." },
+    { key: "weakSimThr", label: "Weak similarity threshold", min: 0.4, max: 0.9, step: 0.01, fmt: (v) => v.toFixed(2),
+      hint: "How alike two passages must look to be checked for a shared layer. Only applies below the similarity threshold." },
+    { key: "shareThr", label: "Shared layer threshold", min: 0, max: 0.9, step: 0.01, fmt: pctFmt,
+      hint: "Share of the mix that has to be the same recording for a moment to belong to a shared-layer result. 0% turns these results off." },
+    { key: "minShare", label: "Minimum shared layer", min: 0, max: 0.9, step: 0.01, fmt: pctFmt,
+      hint: "Shared-layer results whose average shared part is below this are hidden." },
+    { key: "minPartialS", label: "Minimum shared-layer length", min: 2, max: 30, step: 0.5, unit: "s",
+      hint: "Shared-layer stretches shorter than this are dropped." },
     { group: "Filtering results", note: "What's left is filtered, merged and ranked." },
     { key: "minDeep", label: "Minimum average cancellation", min: 0, max: 0.8, step: 0.01, fmt: pctFmt,
       hint: "Results whose average cancelling share is below this are hidden." },
@@ -1972,7 +1982,7 @@
     $("debug").hidden = !dbg;
     if (!dbg) return;
     const st = dbg.stats, opt = dbg.opt;
-    const capHit = dbg.cands.length >= opt.maxCandidates;
+    const capHit = dbg.cands.filter((c) => !c.weak).length >= opt.maxCandidates;
     const cut = st.cut.length;
     $("pipeline").replaceChildren(
       stepItem(dbg.raw, "similar stretches found by the scan"),
@@ -1997,7 +2007,8 @@
   function hiddenEntries(t) {
     const st = t.debug.stats, opt = t.debug.opt, out = [];
     for (const p of st.rejected) {
-      const why = p.cancelDb <= 0 ? "doesn't cancel overall" : `average cancellation ${pctFmt(p.deep)} is below ${pctFmt(opt.minDeep)}`;
+      const why = p.partial ? `shared layer ${pctFmt(p.share)} is below ${pctFmt(opt.minShare)}`
+        : p.cancelDb <= 0 ? "doesn't cancel overall" : `average cancellation ${pctFmt(p.deep)} is below ${pctFmt(opt.minDeep)}`;
       out.push({ p, why });
     }
     for (const { pair, of } of st.duplicates) out.push({ p: pair, why: `sounds the same as ${of.rank ? `#${of.rank}` : "a listed result"}` });
@@ -2080,25 +2091,33 @@
       return out;
     }
     // stage 1: coarse scan
-    if (r.sim.longestS < opt.minLenS) {
+    const weakSeen = opt.shareThr > 0 && t.debug.cands.some((c) => c.weak && Math.abs(c.lag - r.lag) <= opt.weakLagNmsS * t.sr && Math.min(c.b, r.b) > Math.max(c.a, r.a));
+    if (r.sim.longestS < opt.minLenS && weakSeen) {
+      out.push({ ok: true, text: `The scan picked it up as a weak candidate (similarity ${r.sim.max.toFixed(2)}, below ${opt.simThr.toFixed(2)}): the two passages only share part of the mix.` });
+    } else if (r.sim.longestS < opt.minLenS) {
       const need = r.sim.max - 0.02;
       out.push({ bad: true, text: `The first scan can't see this repeat: similarity peaks at ${r.sim.max.toFixed(2)}, and only stays above ${opt.simThr.toFixed(2)} for ${r.sim.longestS.toFixed(1)} s (needs ${opt.minLenS} s).` +
         (need >= 0.5 ? ` Try "Similarity threshold" around ${need.toFixed(2)}` : " Similarity is very low here") + `${r.sim.longestS > 0.5 ? ` or "Minimum repeat length" ${Math.max(1, Math.floor(r.sim.longestS * 2) / 2)} s` : ""}.` });
     } else {
       const cand = t.debug.cands.some((c) => Math.abs(c.lag - r.lag) <= 3 * t.debug.hop && Math.min(c.b, r.b) > Math.max(c.a, r.a));
       if (!cand && !known) {
-        if (t.debug.cands.length >= opt.maxCandidates) out.push({ bad: true, text: `The scan sees it (similarity ${r.sim.max.toFixed(2)} for ${r.sim.longestS.toFixed(1)} s), but it ranked below the ${opt.maxCandidates} candidates that were checked. Raise "Candidates to check".` });
+        if (t.debug.cands.filter((c) => !c.weak).length >= opt.maxCandidates) out.push({ bad: true, text: `The scan sees it (similarity ${r.sim.max.toFixed(2)} for ${r.sim.longestS.toFixed(1)} s), but it ranked below the ${opt.maxCandidates} candidates that were checked. Raise "Candidates to check".` });
         else out.push({ warn: true, text: `The scan sees it (similarity ${r.sim.max.toFixed(2)}), but it was folded into a stronger nearby candidate. Its regions are measured below.` });
       } else if (!known) out.push({ ok: true, text: `The scan picked it up as a candidate (similarity ${r.sim.max.toFixed(2)}).` });
     }
     // stage 2: cancellation regions
     const maxFrac = r.profile.frac.reduce((m, v) => Math.max(m, v), 0);
     if (!r.regions.length) {
-      out.push({ bad: true, text: `No stretch cancels enough to become a result: at most ${pctFmt(maxFrac)} of the energy cancels by ${opt.nullDb} dB (needs ${pctFmt(opt.fracThr)} for ${opt.minRegionS} s). Try lowering "Share that must cancel" or "Cancellation depth".` });
+      const sh = r.profile.share || [], avgShare = sh.length ? sh.reduce((a, v) => a + v, 0) / sh.length : 0;
+      out.push({ bad: true, text: `No stretch cancels enough to become a result: at most ${pctFmt(maxFrac)} of the energy cancels by ${opt.nullDb} dB (needs ${pctFmt(opt.fracThr)} for ${opt.minRegionS} s). Try lowering "Share that must cancel" or "Cancellation depth".` +
+        (opt.shareThr > 0 ? ` As a shared layer it averages ${pctFmt(avgShare)} (needs ${pctFmt(opt.shareThr)} for ${opt.minPartialS} s).` : "") });
     } else {
       for (const p of r.regions) {
         const where = `${fmtTime(p.dstStart / t.sr)}–${fmtTime(p.dstEnd / t.sr)} (${p.lengthS.toFixed(1)} s)`;
-        if (p.cancelDb <= 0 || p.deep < opt.minDeep) out.push({ bad: true, text: `Region ${where} is hidden by "Minimum average cancellation": it averages ${pctFmt(p.deep)}, below ${pctFmt(opt.minDeep)}.` });
+        if (p.partial && p.share < opt.minShare) out.push({ bad: true, text: `Region ${where} shares a layer but is hidden by "Minimum shared layer": it averages ${pctFmt(p.share)}, below ${pctFmt(opt.minShare)}.` });
+        else if (p.partial && !known) out.push({ ok: true, text: `Region ${where} shares a sample-identical layer (${pctFmt(p.share)} of the mix) under different material. It doesn't null deeply (${fmtDb(p.cancelDb)} dB), so it counts as a "Cancels a shared layer" result.` });
+        else if (p.partial) continue;
+        else if (p.cancelDb <= 0 || p.deep < opt.minDeep) out.push({ bad: true, text: `Region ${where} is hidden by "Minimum average cancellation": it averages ${pctFmt(p.deep)}, below ${pctFmt(opt.minDeep)}.` });
         else if (!known) {
           const dup = t.debug.stats.duplicates.find((d) => Math.abs(d.pair.lag - p.lag) <= 32);
           if (dup) out.push({ bad: true, text: `Region ${where} was merged as a duplicate: it sounds the same as #${dup.of.rank}. Raise "Duplicate strictness" to keep both.` });

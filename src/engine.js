@@ -300,16 +300,27 @@
       for (let j = 0; j < nl; j++) {
         const lag = lag0 + j, len = n - lag;
         const sm = uniformFilter1d(d4[j].subarray(0, len), win);
-        let any = false;
-        for (let t = 0; t < len; t++) { const v = sm[t] > opt.simThr; on[t] = v ? 1 : 0; if (v) any = true; }
-        if (!any) continue;
-        for (const [t0, t1] of runsWithGapFill(on.subarray(0, len), win)) {
-          if (t1 - t0 < minLen) continue;
-          let s = 0;
-          for (let t = t0; t < t1; t++) s += sm[t];
-          const mean = s / (t1 - t0);
-          cands.push({ score: mean * (t1 - t0), lag, t0, t1, sim: mean });
-        }
+        const strong = [];
+        const collect = (thr, weak) => {
+          let any = false;
+          for (let t = 0; t < len; t++) { const v = sm[t] > thr; on[t] = v ? 1 : 0; if (v) any = true; }
+          if (!any) return false;
+          for (const [t0, t1] of runsWithGapFill(on.subarray(0, len), win)) {
+            if (t1 - t0 < minLen) continue;
+            // a weak run that is mostly a strong run is the same candidate again
+            if (weak && strong.some(([s0, s1]) => Math.min(t1, s1) - Math.max(t0, s0) > 0.5 * (t1 - t0))) continue;
+            let s = 0;
+            for (let t = t0; t < t1; t++) s += sm[t];
+            const mean = s / (t1 - t0);
+            if (weak) cands.push({ score: mean * (t1 - t0), lag, t0, t1, sim: mean, weak: true });
+            else { strong.push([t0, t1]); cands.push({ score: mean * (t1 - t0), lag, t0, t1, sim: mean }); }
+          }
+          return true;
+        };
+        // passages that share only a layer (same backing, different lead) look less alike
+        const weakThr = opt.shareThr > 0 && opt.weakSimThr < opt.simThr ? opt.weakSimThr : 0;
+        collect(opt.simThr, false);
+        if (weakThr) collect(weakThr, true);
       }
       if (progress && ((lag0 - lagFrom) & 63) === 0) progress((lag0 - lagFrom) / total);
     }
@@ -317,21 +328,31 @@
   }
 
   /** Non-maximum suppression over raw candidates -> candidate list in samples. */
-  function selectCandidates(raw, hop, opt) {
-    const cands = raw.slice().sort((p, q) => q.score - p.score || p.lag - q.lag || p.t0 - q.t0);
+  function selectCandidates(raw, hop, opt, sr) {
+    const order = (p, q) => q.score - p.score || p.lag - q.lag || p.t0 - q.t0;
     const kept = [];
-    for (const c of cands) {
-      let dup = false;
-      for (const k of kept) {
-        if (Math.abs(k.lag - c.lag) <= 3) {
-          const ov = Math.min(c.t1, k.t1) - Math.max(c.t0, k.t0);
-          if (ov > 0.5 * Math.min(c.t1 - c.t0, k.t1 - k.t0)) { dup = true; break; }
+    const pick = (cands, radius, limit) => {
+      let n = 0;
+      for (const c of cands) {
+        if (n >= limit) break;
+        let dup = false;
+        for (const k of kept) {
+          if (Math.abs(k.lag - c.lag) <= radius) {
+            const ov = Math.min(c.t1, k.t1) - Math.max(c.t0, k.t0);
+            if (ov > 0.5 * Math.min(c.t1 - c.t0, k.t1 - k.t0)) { dup = true; break; }
+          }
         }
+        if (!dup) { kept.push(c); n++; }
       }
-      if (!dup) kept.push(c);
-      if (kept.length >= opt.maxCandidates) break;
-    }
-    return kept.map((c) => ({ lag: c.lag * hop, a: (c.t0 + c.lag) * hop, b: (c.t1 + c.lag) * hop, sim: c.sim }));
+    };
+    pick(raw.filter((c) => !c.weak).sort(order), 3, opt.maxCandidates);
+    // weak candidates smear over many neighbouring offsets: keep the best of each cluster
+    pick(raw.filter((c) => c.weak).sort(order), Math.max(3, Math.round((opt.weakLagNmsS * (sr || 44100)) / hop)), opt.maxWeakCandidates);
+    return kept.map((c) => {
+      const o = { lag: c.lag * hop, a: (c.t0 + c.lag) * hop, b: (c.t1 + c.lag) * hop, sim: c.sim };
+      if (c.weak) o.weak = true;
+      return o;
+    });
   }
 
   // ------------------------------------------------- sample-exact lag
@@ -393,6 +414,37 @@
     return { lag: best, sharpness: sharp };
   }
 
+  /**
+   * Lag lock for a weak candidate. Where only a layer is shared, the full-band level barely
+   * moves between neighbouring offsets, so cancellation can't pick the sample. The shared-layer
+   * measure can: it drops sharply one sample off. Scored on frames spread over the whole span.
+   */
+  function refineLagShared(ch, m, sr, lagGuess, a, b, hop, opt) {
+    const search = 2 * hop, mid = (a + b) >> 1;
+    const xc = Math.floor(Math.min(opt.xcorrChunkS * sr, (opt.xcorrFftSize - 2 * search - 16) / 2) / 2);
+    const shortlist = xcorrLagPeaks(m, Math.max(a, mid - xc), Math.min(b, mid + xc), lagGuess, search, 3);
+    const scores = new Map();
+    const score = (L) => {
+      if (!scores.has(L)) {
+        const prof = new Profile(ch, sr, L, opt.nullDb);
+        const f0 = Math.max(0, prof.frameOf(Math.max(a, L) + prof.hop - 1)), f1 = Math.min(prof.T, prof.frameOf(b - prof.nper) + 1);
+        const stride = Math.max(1, Math.ceil((f1 - f0) / 48));
+        let sum = 0, cnt = 0;
+        for (let t = f0; t < f1; t += stride) { prof.compute(t, t + 1); sum += prof.share[t]; cnt++; }
+        scores.set(L, cnt ? sum / cnt : 0);
+      }
+      return scores.get(L);
+    };
+    for (const L0 of shortlist) score(L0);
+    let best = shortlist[0];
+    for (const [L, v] of scores) if (v > scores.get(best)) best = L;
+    for (let step = 0; step < 4; step++) {               // walk to the local peak
+      const up = score(best + 1), down = score(best - 1), here = score(best);
+      if (up > here && up >= down) best += 1; else if (down > here) best -= 1; else break;
+    }
+    return { lag: best, sharpness: score(best) - 0.5 * (score(best - 1) + score(best + 1)), share: score(best) };
+  }
+
   // ---------------------------------------------------- region finding
   const BANDS = [[0, 200], [200, 1000], [1000, 4000], [4000, 20000]];
 
@@ -401,13 +453,22 @@
    * (frame t starts at sample lag + t*hop). For each frame: energy fraction of TF bins
    * cancelling by >= nullDb, plus per-band energy sums. Frames are computed once even
    * when the analysis window grows.
+   *
+   * `share` measures something weaker: how much of the frame is the same recording at all,
+   * even when it doesn't cancel deeply. It is the level-weighted mean, over the bins above
+   * SHARE_MIN_HZ, of 1 - |X1 - X2|^2 / (|X1|^2 + |X2|^2): 1 where the two passages are
+   * identical, about 0 where they are unrelated. Weighting by level rather than energy keeps
+   * a loud unrelated part (a different bass line, a different vocal) from hiding a shared layer.
    */
+  const SHARE_MIN_HZ = 100;
   function Profile(ch, sr, lag, nullDb) {
     this.ch = ch; this.sr = sr; this.lag = lag;
     this.nper = sr <= 48000 ? 2048 : 4096; this.hop = this.nper; // ~46 ms, non-overlapping
     const n = ch[0].length;
     this.T = n - lag >= this.nper ? 1 + Math.floor((n - lag - this.nper) / this.hop) : 0;
     this.frac = new Float64Array(this.T);
+    this.share = new Float64Array(this.T);
+    this.kShare = Math.ceil((SHARE_MIN_HZ * this.nper) / sr);
     this.bandP = new Float64Array(this.T * 4); this.bandD = new Float64Array(this.T * 4);
     this.done = new Uint8Array(this.T);
     this.thr = Math.pow(10, -nullDb / 10);
@@ -426,37 +487,39 @@
   Profile.prototype.startOf = function (t) { return this.lag + t * this.hop; };
   Profile.prototype.compute = function (t0, t1) {
     t0 = Math.max(0, t0); t1 = Math.min(this.T, t1);
-    const { nper, hop, lag, thr, bandOf, b1, b2, r1, i1, r2, i2 } = this;
+    const { nper, hop, lag, thr, bandOf, b1, b2, r1, i1, r2, i2, kShare } = this;
     const fft = rfftFor(nper), w = hann(nper), H = nper / 2 + 1, sc2 = Math.pow(1 / (nper / 2), 2);
     for (let t = t0; t < t1; t++) {
       if (this.done[t]) continue;
       const off = lag + t * hop;
-      let wsum = 0, dsum = 0;
+      let wsum = 0, dsum = 0, asum = 0, ssum = 0;
       for (const c of this.ch) {
         for (let i = 0; i < nper; i++) { b1[i] = c[off + i] * w[i]; b2[i] = c[off - lag + i] * w[i]; }
         fft.forward(b1, r1, i1);
         fft.forward(b2, r2, i2);
         for (let k = 0; k < H; k++) {
           const P = (r1[k] * r1[k] + i1[k] * i1[k] + r2[k] * r2[k] + i2[k] * i2[k]) * 0.5 * sc2;
-          const dr = r1[k] - r2[k], di = i1[k] - i2[k];
+          const dr = r1[k] - r2[k], di = i1[k] - i2[k], Dk = (dr * dr + di * di) * sc2;
           wsum += P;
           this.bandP[t * 4 + bandOf[k]] += P;
-          if ((dr * dr + di * di) * sc2 < P * thr) { dsum += P; this.bandD[t * 4 + bandOf[k]] += P; }
+          if (Dk < P * thr) { dsum += P; this.bandD[t * 4 + bandOf[k]] += P; }
+          if (k >= kShare && P > 0) { const a = Math.sqrt(P); asum += a; ssum += a * (1 - Dk / (2 * P)); }
         }
       }
       this.frac[t] = wsum < 1e-7 ? 0 : dsum / (wsum + 1e-12);
+      this.share[t] = wsum < 1e-7 || asum <= 0 ? 0 : Math.max(0, ssum / asum);
       this.done[t] = 1;
     }
   };
 
-  function findRegions(ch, sr, lag, a, b, opt, shared) {
+  function findRegions(ch, sr, lag, a, b, opt, shared, partial) {
     // analyse a small margin first; grow the window while a region touches its edge
     const prof = shared || new Profile(ch, sr, lag, opt.nullDb);
     const n = ch[0].length, step = Math.floor(opt.extendStepS * sr);
     let lo = Math.max(lag, a - step), hi = Math.min(n, b + step);
     let regs;
     for (let iter = 0; iter < 200; iter++) {
-      regs = regionsIn(prof, lo, hi, opt);
+      regs = regionsIn(prof, lo, hi, opt, partial);
       const edge = Math.floor(0.5 * sr);
       const growLo = lo > lag && regs.some((r) => r.s - lo < edge);
       const growHi = hi < n && regs.some((r) => hi - r.e < edge);
@@ -489,10 +552,10 @@
 
   /** Every region where the copy at `lag` cancels: the candidate's own zone plus any other
    *  zone the coarse spectra flag, sharing one lazily computed profile. */
-  function regionsForLag(ch, sr, lag, a, b, opt, feat) {
+  function regionsForLag(ch, sr, lag, a, b, opt, feat, partialOnly) {
     const prof = new Profile(ch, sr, lag, opt.nullDb);
-    const zones = [[a, b]];
-    if (feat) for (const z of similarZones(feat, sr, lag, opt)) zones.push(z);
+    const zones = partialOnly ? [] : [[a, b]];
+    if (feat && !partialOnly) for (const z of similarZones(feat, sr, lag, opt)) zones.push(z);
     const out = [];
     for (const [za, zb] of zones) {
       if (out.some((r) => za >= r.s && zb <= r.e)) continue;     // already covered
@@ -500,34 +563,43 @@
         if (!out.some((q) => Math.min(q.e, r.e) > Math.max(q.s, r.s))) out.push(r);
       }
     }
+    // Partial twins: stretches that share a sample-identical layer under different material,
+    // so they don't null deeply. (finalize drops the ones that are only a deep result's fringe.)
+    if (opt.shareThr > 0) out.push(...findRegions(ch, sr, lag, a, b, opt, prof, true));
     return out;
   }
 
-  function regionsIn(p, a, b, opt) {
+  function regionsIn(p, a, b, opt, partial) {
     const f0 = Math.max(0, Math.ceil((a - p.lag) / p.hop)), f1 = Math.min(p.T, p.frameOf(b - p.nper) + 1);
     if (f1 - f0 <= 0) return [];
     p.compute(f0, f1);
-    const T = f1 - f0, frac = p.frac.subarray(f0, f1);
+    const T = f1 - f0, frac = p.frac.subarray(f0, f1), share = p.share.subarray(f0, f1);
+    // deep regions follow the cancelling share; partial ones follow the shared-layer measure
+    // (a shared layer comes and goes with the arrangement, so it is smoothed and bridged further)
+    const val = partial ? share : frac, thr = partial ? opt.shareThr : opt.fracThr;
+    const minS = partial ? opt.minPartialS : opt.minRegionS;
     const fps = p.sr / p.hop;
-    const sm = uniformFilter1d(frac, Math.max(1, Math.floor(opt.regionSmoothS * fps)));
+    const sm = uniformFilter1d(val, Math.max(1, Math.floor((partial ? opt.partialSmoothS : opt.regionSmoothS) * fps)));
     const on = new Uint8Array(T);
-    for (let t = 0; t < T; t++) on[t] = sm[t] > opt.fracThr ? 1 : 0;
+    for (let t = 0; t < T; t++) on[t] = sm[t] > thr ? 1 : 0;
     const regs = [];
-    for (let [t0, t1] of runsWithGapFill(on, Math.max(1, Math.floor(opt.gapS * fps)))) {
-      if ((t1 - t0) / fps < opt.minRegionS) continue;
+    for (let [t0, t1] of runsWithGapFill(on, Math.max(1, Math.floor((partial ? opt.partialGapS : opt.gapS) * fps)))) {
+      if ((t1 - t0) / fps < minS) continue;
       let g0 = -1, g1 = -1; // tighten to raw profile
-      for (let t = t0; t < t1; t++) if (frac[t] > opt.fracThr) { if (g0 < 0) g0 = t; g1 = t; }
+      for (let t = t0; t < t1; t++) if (val[t] > thr) { if (g0 < 0) g0 = t; g1 = t; }
       if (g0 >= 0) { t0 = g0; t1 = g1 + 1; }
       const s = p.startOf(f0 + t0);
       const e = Math.min(p.startOf(f0 + Math.min(t1, T - 1)) + p.hop, b);
-      let fm = 0;
+      let fm = 0, sh = 0;
       const bp = [0, 0, 0, 0], bd = [0, 0, 0, 0];
       for (let t = t0; t < t1; t++) {
-        fm += frac[t];
+        fm += frac[t]; sh += share[t];
         const g = (f0 + t) * 4;
         for (let j = 0; j < 4; j++) { bp[j] += p.bandP[g + j]; bd[j] += p.bandD[g + j]; }
       }
-      regs.push({ s, e, deep: fm / (t1 - t0), bands: bp.map((v, j) => (v > 0 ? bd[j] / v : 0)) });
+      const reg = { s, e, deep: fm / (t1 - t0), share: sh / (t1 - t0), bands: bp.map((v, j) => (v > 0 ? bd[j] / v : 0)) };
+      if (partial) reg.partial = true;
+      regs.push(reg);
     }
     return regs;
   }
@@ -541,6 +613,8 @@
       srcStart: reg.s - lag, srcEnd: reg.e - lag,
       cancelDb: cancelDb(ch, lag, reg.s, reg.e),
       deep: reg.deep,
+      share: reg.share,
+      partial: !!reg.partial,
       bands: reg.bands,
       sharpness: extra.sharpness,
       coarseSim: extra.sim,
@@ -549,7 +623,8 @@
     return scorePair(p);
   }
   function scorePair(p) {
-    p.breadth = p.bands.length ? p.bands.reduce((s, v) => s + v, 0) / p.bands.length : p.deep;
+    // a partial twin is judged by how much of it is shared, not by how much nulls
+    p.breadth = p.partial ? p.share : p.bands.length ? p.bands.reduce((s, v) => s + v, 0) / p.bands.length : p.deep;
     p.lengthS = (p.dstEnd - p.dstStart) / p.sr;
     p.score = p.breadth * Math.sqrt(p.lengthS) * Math.sqrt(Math.max(p.cancelDb, 0.1));
     return p;
@@ -586,7 +661,7 @@
     const merged = [];
     for (const p of pairs) {
       const gap = opt.sameGapS * sr;
-      const q = merged.find((q) => Math.abs(q.lag - p.lag) <= opt.sameLagSamples &&
+      const q = merged.find((q) => Math.abs(q.lag - p.lag) <= opt.sameLagSamples && !q.partial === !p.partial &&
         Math.min(p.dstEnd, q.dstEnd) - Math.max(p.dstStart, q.dstStart) > -gap);
       if (q) {
         q.merged += 1;
@@ -595,6 +670,7 @@
         if (s !== q.dstStart || e !== q.dstEnd) {
           const wq = q.dstEnd - q.dstStart, wp = p.dstEnd - p.dstStart;
           q.deep = (q.deep * wq + p.deep * wp) / (wq + wp);
+          if (q.share !== undefined && p.share !== undefined) q.share = (q.share * wq + p.share * wp) / (wq + wp);
           q.bands = q.bands.map((v, j) => (v * wq + p.bands[j] * wp) / (wq + wp));
           q.dstStart = s; q.dstEnd = e; q.srcStart = s - q.lag; q.srcEnd = e - q.lag;
           q.cancelDb = cancelDb(ch, q.lag, s, e);
@@ -622,6 +698,9 @@
     nullDb: 15, fracThr: 0.3, regionSmoothS: 1, minRegionS: 3, gapS: 1.5,
     minDeep: 0.3, sameLagSamples: 32, sameGapS: 1.0, identicalOverlap: 0.5, identicalSdrDb: 15, maxResults: 40,
     extendStepS: 4, zoneThr: 0.7, minZoneS: 1.5,
+    // partial twins (a shared layer under different material); shareThr 0 turns them off
+    weakSimThr: 0.6, maxWeakCandidates: 20, weakLagNmsS: 1.5,
+    shareThr: 0.3, partialSmoothS: 4, partialGapS: 3, minPartialS: 8, minShare: 0.35,
   };
 
   function options(o) { return Object.assign({}, DEFAULTS, o || {}); }
@@ -651,8 +730,13 @@
       c = Object.assign({}, c, { a: c.lag + 2 * hop + 8 });
       if (c.b - c.a < opt.minRegionS * sr) return [];
     }
-    const r = refineLag(ch, m, sr, c.lag, c.a, c.b, hop, opt);
-    return regionsForLag(ch, sr, r.lag, c.a, c.b, opt, features(ctx))
+    let r;
+    if (c.weak) {
+      r = refineLagShared(ch, m, sr, c.lag, c.a, c.b, hop, opt);
+      if (r.share < 0.5 * opt.shareThr) return [];      // nothing sample-identical at this offset
+    } else r = refineLag(ch, m, sr, c.lag, c.a, c.b, hop, opt);
+    // a weak candidate only ever yields partial twins: the strong ones own the deep regions
+    return regionsForLag(ch, sr, r.lag, c.a, c.b, opt, features(ctx), !!c.weak)
       .map((reg) => makePair(ch, sr, r.lag, reg, { sharpness: r.sharpness, sim: c.sim }));
   }
   /**
@@ -661,9 +745,17 @@
    */
   function finalize(ctx, found, stats) {
     const { ch, sr, opt } = ctx;
-    const kept = [], rejected = [];
-    for (const p of found) (p.deep >= opt.minDeep && p.cancelDb > 0 ? kept : rejected).push(p);
-    if (stats) Object.assign(stats, { found: found.length, rejected, afterFilter: kept.length, duplicates: [] });
+    const kept = [], rejected = [], fringe = [];
+    const gap = opt.sameGapS * sr;
+    for (const p of found) {
+      if (!p.partial) { (p.deep >= opt.minDeep && p.cancelDb > 0 ? kept : rejected).push(p); continue; }
+      // a partial twin touching a deep result at the same offset is that result's fringe
+      const of = found.find((q) => !q.partial && Math.abs(q.lag - p.lag) <= opt.sameLagSamples &&
+        Math.min(p.dstEnd, q.dstEnd) - Math.max(p.dstStart, q.dstStart) > -gap);
+      if (of) fringe.push({ pair: p, of });
+      else (p.share >= opt.minShare ? kept : rejected).push(p);
+    }
+    if (stats) Object.assign(stats, { found: found.length - fringe.length, rejected, fringe, afterFilter: kept.length, duplicates: [] });
     const all = dedupe(ch, sr, kept, opt, stats);
     const res = all.slice(0, opt.maxResults);
     if (stats) { stats.afterDedupe = all.length; stats.cut = all.slice(opt.maxResults); }
@@ -690,7 +782,13 @@
     const sc = Math.floor((opt.scoreChunkS * sr) / 2), sa = Math.max(a, mid - sc), sb = Math.min(b, mid + sc);
     let coarse = guess, bestDb = -Infinity;
     for (const L of shortlist) { if (sa - L < 0) continue; const v = cancelDb(ch, L, sa, sb); if (v > bestDb) { bestDb = v; coarse = L; } }
-    const r = refineLag(ch, m, sr, coarse, a, b, hop, opt);
+    let r = refineLag(ch, m, sr, coarse, a, b, hop, opt);
+    let regs = regionsForLag(ch, sr, r.lag, a, b, opt, null);
+    if (opt.shareThr > 0 && !regs.some((g) => !g.partial)) {
+      // nothing nulls deeply: lock the offset on the shared layer instead, as the search does
+      const rs = refineLagShared(ch, m, sr, coarse, a, b, hop, opt);
+      if (rs.lag !== r.lag && rs.share >= 0.5 * opt.shareThr) { r = rs; regs = regionsForLag(ch, sr, r.lag, a, b, opt, null); }
+    }
     const lag = r.lag;
 
     // what the coarse scan sees along this diagonal (same smoothing and threshold)
@@ -708,8 +806,8 @@
     const prof = new Profile(ch, sr, lag, opt.nullDb);
     const pa = Math.max(0, prof.frameOf(a)), pb = Math.max(pa, Math.min(prof.T, prof.frameOf(b)));
     prof.compute(pa, pb);
-    const profile = { start: prof.startOf(pa), hop: prof.hop, frac: Array.from(prof.frac.subarray(pa, pb)) };
-    const regions = regionsForLag(ch, sr, lag, a, b, opt, null)
+    const profile = { start: prof.startOf(pa), hop: prof.hop, frac: Array.from(prof.frac.subarray(pa, pb)), share: Array.from(prof.share.subarray(pa, pb)) };
+    const regions = regs
       .map((reg) => makePair(ch, sr, lag, reg, { sharpness: r.sharpness, sim: sim.mean }));
     return { guess, lag, sharpness: r.sharpness, a, b, sr, cancelDb: cancelDb(ch, lag, a, b), sim, profile, regions, opt };
   }
@@ -726,7 +824,7 @@
     const f = features(ctx);
     const [l0, l1] = lagRange(ctx);
     const raw = coarseScan(f, sr, ctx.opt, l0, l1, (x) => prog("map", x));
-    const cands = selectCandidates(raw, f.hop, ctx.opt);
+    const cands = selectCandidates(raw, f.hop, ctx.opt, sr);
     const found = [];
     cands.forEach((c, i) => {
       prog("lock", i / cands.length);
