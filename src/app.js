@@ -2413,6 +2413,23 @@
     setPickMode("listen");
   }
 
+  // installed app: songs sent to isol8 from the OS share sheet. The service worker parks them in a cache (see sw.js).
+  async function takeShared() {
+    if (!new URLSearchParams(location.search).has("shared") || !("caches" in window)) return;
+    history.replaceState(null, "", location.pathname);
+    try {
+      const cache = await caches.open("isol8-share");
+      const files = [];
+      for (const key of await cache.keys()) {
+        const res = await cache.match(key);
+        const blob = await res.blob();
+        files.push(new File([blob], decodeURIComponent(res.headers.get("X-Name") || "") || "Shared song", { type: blob.type }));
+      }
+      await caches.delete("isol8-share");
+      if (files.length) { addFiles(files); wakeScope(); }
+    } catch (err) { toast("Couldn't open the shared song.", "error"); }
+  }
+
   // ----------------------------------------------------------------- events
   function bind() {
     $("chooseFile").addEventListener("click", () => $("fileInput").click());
@@ -2430,6 +2447,7 @@
         if (ok.length) { addFiles(ok); wakeScope(); }
       });
     }
+    takeShared();
 
     const sc = $("scope");
     let depth = 0;

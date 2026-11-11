@@ -20,5 +20,15 @@
       "action": "./",
       "accept": { "audio/*": [".mp3", ".flac", ".wav", ".aif", ".aiff", ".ogg", ".opus", ".m4a"] }
     }
-  ]
+  ],
+  "share_target": {
+    "action": "./share",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "files": [
+        { "name": "audio", "accept": ["audio/*", ".mp3", ".flac", ".wav", ".aif", ".aiff", ".ogg", ".opus", ".m4a"] }
+      ]
+    }
+  }
 }

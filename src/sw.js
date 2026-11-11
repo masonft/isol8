@@ -4,6 +4,7 @@
  * Bump VERSION when the list of files changes.
  */
 const VERSION = "isol8-v1";
+const SHARE = "isol8-share";   // songs sent from the OS share sheet wait here until the page collects them
 const SHELL = [
   "./", "index.html", "how.html", "styles.css", "how.css",
   "theme.js", "github.js", "pwa.js", "app.js", "how.js", "engine.js", "decode.js", "export.js",
@@ -17,13 +18,14 @@ self.addEventListener("install", (e) => {
 });
 
 self.addEventListener("activate", (e) => {
-  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== VERSION).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== VERSION && k !== SHARE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
 self.addEventListener("fetch", (e) => {
   const req = e.request;
-  if (req.method !== "GET") return;
   const url = new URL(req.url);
+  if (req.method === "POST" && url.origin === self.location.origin && url.pathname.endsWith("/share")) return e.respondWith(receiveShare(req));
+  if (req.method !== "GET") return;
   if (url.origin !== self.location.origin) return;          // e.g. the GitHub star count
   e.respondWith((async () => {
     const cache = await caches.open(VERSION);
@@ -38,3 +40,20 @@ self.addEventListener("fetch", (e) => {
     }
   })());
 });
+
+/*
+ * Share target (see manifest): the OS posts the shared songs here. A page can't read a POST body,
+ * so they are parked in a cache and the app picks them up after the redirect. They never leave the device.
+ */
+async function receiveShare(req) {
+  try {
+    const form = await req.formData();
+    const files = form.getAll("audio").filter((f) => f && typeof f !== "string");
+    await caches.delete(SHARE);
+    const cache = await caches.open(SHARE);
+    await Promise.all(files.map((f, i) => cache.put(`shared/${i}`, new Response(f, {
+      headers: { "Content-Type": f.type || "application/octet-stream", "X-Name": encodeURIComponent(f.name || "") },
+    }))));
+  } catch (err) { /* nothing usable was shared; just open the app */ }
+  return Response.redirect("./?shared", 303);
+}
