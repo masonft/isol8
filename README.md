@@ -14,7 +14,9 @@
 </div>
 
 # isol8
-Find the hidden sounds in a song. isol8 detects sections that repeat, such as a chorus, and phase-cancels one copy against the other, leaving only what differs between them. Everything runs in your browser, so nothing is uploaded to a server.
+Find the hidden sounds in a song.
+
+isol8 detects sections that repeat, such as a chorus, and phase-cancels one copy against the other, leaving only what differs between them. Everything runs in your browser, so nothing is uploaded to a server.
 
 **This is NOT just another vocal remover.** It doesn't estimate or guess: what you hear is exactly what one copy has and the other doesn't.
 
