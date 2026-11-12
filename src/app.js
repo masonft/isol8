@@ -1949,7 +1949,7 @@
         const done = () => { clearTimeout(p._closeTimer); p.removeEventListener("animationend", onEnd); if (p.classList.contains("closing")) { p.classList.remove("closing"); p.hidden = true; } };
         const onEnd = (e) => { if (e.target === p) done(); };
         p.addEventListener("animationend", onEnd);
-        p._closeTimer = setTimeout(done, 500);   // fallback if the animation never runs
+        p._closeTimer = setTimeout(done, 800);   // fallback if the animation never runs
       }
     }
     ["settingsToggle", "settingsBtn"].forEach((id) => $(id).setAttribute("aria-expanded", String(open)));
