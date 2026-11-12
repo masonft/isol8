@@ -1937,23 +1937,44 @@
   }
   function toggleSettings(open) {
     const p = $("settings");
-    const shown = !p.hidden && !p.classList.contains("closing");
+    const collapse = p._collapse;   // the fold-away animation, while one is running (either direction)
+    const shown = !p.hidden && !p._closing;
     open = open === undefined ? !shown : open;
-    clearTimeout(p._closeTimer);
-    if (open) { p.classList.remove("closing"); p.hidden = false; }
-    else if (shown) {
-      // play the opening animation in reverse, then hide
-      if (reduceMotion) p.hidden = true;
+    if (open) {
+      if (collapse) collapse.reverse();   // reopened mid-close: grow back from where it got to
+      else p.hidden = false;
+      p._closing = false;
+    } else if (shown) {
+      if (reduceMotion || !p.animate) p.hidden = true;
+      else if (collapse) { collapse.reverse(); p._closing = true; }
       else {
-        p.classList.add("closing");
-        const done = () => { clearTimeout(p._closeTimer); p.removeEventListener("animationend", onEnd); if (p.classList.contains("closing")) { p.classList.remove("closing"); p.hidden = true; } };
-        const onEnd = (e) => { if (e.target === p) done(); };
-        p.addEventListener("animationend", onEnd);
-        p._closeTimer = setTimeout(done, 800);   // fallback if the animation never runs
+        // Fold the panel away instead of just hiding it. Hiding a tall panel shortens the page all at
+        // once, which snaps the scroll position back; so shrink it, and glide the page back up in step.
+        const cs = getComputedStyle(p), root = document.documentElement;
+        const gone = p.offsetHeight + parseFloat(cs.marginTop);   // how much shorter the page ends up
+        const y0 = window.scrollY, y1 = Math.min(y0, Math.max(0, root.scrollHeight - gone - window.innerHeight));
+        p.classList.add("closing"); p._closing = true;
+        const a = p._collapse = p.animate([
+          { height: `${p.offsetHeight}px`, marginTop: cs.marginTop, paddingTop: cs.paddingTop, paddingBottom: cs.paddingBottom, opacity: 1 },
+          { opacity: 0, offset: 0.7 },
+          { height: "0px", marginTop: "0px", paddingTop: "0px", paddingBottom: "0px", opacity: 0 },
+        ], { duration: 380, easing: "cubic-bezier(0.4, 0, 0.2, 1)", fill: "both" });
+        const glide = () => {   // follows the animation both ways, so reopening part-way scrolls back down
+          if (p._collapse !== a) return;
+          const k = a.effect.getComputedTiming().progress;
+          if (k != null) window.scrollTo({ top: y0 + (y1 - y0) * k, behavior: "instant" });
+          requestAnimationFrame(glide);
+        };
+        if (y1 < y0) requestAnimationFrame(glide);
+        a.onfinish = () => {   // p._closing, not a.playbackRate: reverse() only updates the rate later
+          if (y1 < y0) window.scrollTo({ top: p._closing ? y1 : y0, behavior: "instant" });
+          if (p._closing) p.hidden = true;
+          p.classList.remove("closing"); p._collapse = null; p._closing = false; a.cancel();
+        };
       }
     }
     ["settingsToggle", "settingsBtn"].forEach((id) => $(id).setAttribute("aria-expanded", String(open)));
-    if (open) p.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "nearest" });
+    if (open && !collapse) p.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "nearest" });
   }
   async function reanalyse() {
     const t = track();

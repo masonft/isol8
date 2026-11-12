@@ -830,10 +830,7 @@ footer p { margin: 0; }
 .add-song.ghosty:hover svg { transform: none; }
 .changed-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 8px var(--amber); }
 .settings { margin-top: 18px; border-radius: var(--r-lg); padding: 20px 22px 8px; animation: rise-panel 0.6s var(--ease-out); scroll-margin-top: 80px; }
-/* closing is the opening played backwards: same keyframes, duration and easing, run in reverse.
-   (It needs its own keyframes name, or swapping the class would not restart the animation.) */
-.settings.closing { animation: sink-panel 0.6s var(--ease-out) reverse forwards; pointer-events: none; }
-@keyframes sink-panel { from { opacity: 0; transform: translateY(20px); } }
+.settings.closing { overflow: hidden; pointer-events: none; } /* folding away, see toggleSettings */
 .settings-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px 20px; flex-wrap: wrap; margin-bottom: 8px; }
 .settings-head h2 { font-size: 18px; }
 .settings-head .sub { margin: 4px 0 0; color: var(--text-3); font-size: 13px; }
