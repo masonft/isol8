@@ -10,6 +10,7 @@
  *  - MP3 is the default format (encoded with the vendored LAME when present)
  *  - the How it works page renders without errors
  *  - low-quality files are flagged; results play when clicked
+ *  - the stereo mix slider appears in Mix and labels the balance
  *  - debug tools: pipeline, song picker, pair probe, adding hidden results, settings + re-analyse
  *  - no network request leaves localhost except the GitHub star count (mocked here),
  *    no console errors
@@ -206,6 +207,20 @@ function serve() {
   check(await page.getAttribute('.modes button[data-mode="dst"]', "aria-pressed") === "true", "key 2 switches to the twin");
   if (SHOTS) await page.screenshot({ path: path.join(SHOTS, "desktop-results.png"), fullPage: true });
   await page.click("#playBtn");
+
+  // stereo mix: the balance slider only shows in Mix, and names what it turns down
+  await page.click('#stereoRow .seg button[data-part="mix"]');
+  const mixShown = await page.isVisible("#mixPick"), mixMid = await page.textContent("#stereoMixOut");
+  const setMix = (v) => page.$eval("#stereoMix", (el, v) => { el.value = v; el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); }, v);
+  await setMix(25);
+  const mixLow = await page.textContent("#stereoMixOut");
+  await setMix(100);
+  const mixEnd = await page.textContent("#stereoMixOut");
+  await page.waitForFunction(() => !document.getElementById("player").classList.contains("working"));
+  if (SHOTS) await (await page.$("#stereoRow")).screenshot({ path: path.join(SHOTS, "stereo-mix.png") });
+  await page.click('#stereoRow .seg button[data-part="full"]');
+  check(mixShown && mixMid === "Even" && mixLow === "Sides at 50%" && mixEnd === "Sides only" && !(await page.isVisible("#mixPick")),
+    `stereo mix slider blends center and sides ("${mixMid}", "${mixLow}", "${mixEnd}") and hides again in Full`);
 
   if (SHOTS) {
     const mob = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });

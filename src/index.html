@@ -96,6 +96,12 @@
         viewBox="0 0 16 16" aria-hidden="true">
         <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
       </svg><span class="lbl">Close all</span></button>
+    <button class="add-song" id="addSong" type="button" title="Add a song">
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+      </svg>
+      <span class="lbl">Add a song</span>
+    </button>
     <button class="add-song ghosty" id="settingsBtn" type="button" title="Settings" aria-expanded="false"
       aria-controls="settings"><svg viewBox="0 0 16 16" aria-hidden="true">
         <path d="M2.5 4.5h7M12.5 4.5h1M2.5 11.5h1M6.5 11.5h7" stroke="currentColor" stroke-width="1.5"
@@ -103,12 +109,6 @@
         <circle cx="11" cy="4.5" r="1.6" fill="none" stroke="currentColor" stroke-width="1.4" />
         <circle cx="5" cy="11.5" r="1.6" fill="none" stroke="currentColor" stroke-width="1.4" />
       </svg><span class="lbl">Settings</span><span class="changed-dot" hidden></span></button>
-    <button class="add-song" id="addSong" type="button" title="Add a song">
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-      </svg>
-      <span class="lbl">Add a song</span>
-    </button>
   </nav>
 
   <noscript>
@@ -133,9 +133,9 @@
           </button>
           <a class="btn ghost" href="how.html">How it works <span aria-hidden="true" class="arrow">→</span></a>
         </div>
-        <p class="formats reveal"><span class="drop-hint">Or drop files anywhere. </span><span class="fmt lossless"><span
-            class="fmt-label">Lossless</span>FLAC, WAV, AIFF</span><span class="fmt lossy"><span
-            class="fmt-label">Lossy</span>MP3, M4A, OGG, Opus</span></p>
+        <p class="formats reveal"><span class="fmt lossless"><span class="fmt-label">Lossless</span>FLAC, WAV,
+            AIFF</span><span class="fmt lossy"><span class="fmt-label">Lossy</span>MP3, M4A, OGG, Opus</span><span
+            class="drop-note">Or drop files anywhere.</span></p>
         <button class="settings-link reveal" id="settingsToggle" type="button" aria-expanded="false"
           aria-controls="settings"><svg viewBox="0 0 16 16" aria-hidden="true">
             <path d="M2.5 4.5h7M12.5 4.5h1M2.5 11.5h1M6.5 11.5h7" stroke="currentColor" stroke-width="1.5"
@@ -183,35 +183,6 @@
         </div>
       </div>
       <div class="settings-body" id="settingsBody"></div>
-    </section>
-
-    <section class="intro" id="intro" aria-label="What isol8 does">
-      <article class="step-card reveal">
-        <svg viewBox="0 0 64 32" aria-hidden="true">
-          <path d="M2 16h8l3-9 4 18 4-14 3 8 3-3h6" class="sc-a" />
-          <path d="M34 16h8l3-9 4 18 4-14 3 8 3-3h3" class="sc-b" />
-        </svg>
-        <span class="step-n">1</span>
-        <h3>Find the twins</h3>
-        <p>A spectral scan maps every passage that was pasted in more than once.</p>
-      </article>
-      <article class="step-card reveal">
-        <svg viewBox="0 0 64 32" aria-hidden="true">
-          <path d="M4 16c6-12 10-12 14 0s8 12 14 0 8-12 14 0 8 12 14 0" class="sc-a" />
-          <path d="M4 16c6 12 10 12 14 0s8-12 14 0 8 12 14 0 8-12 14 0" class="sc-b" />
-        </svg>
-        <span class="step-n">2</span>
-        <h3>Lock and flip</h3>
-        <p>One copy is aligned to the exact sample and its phase inverted.</p>
-      </article>
-      <article class="step-card reveal">
-        <svg viewBox="0 0 64 32" aria-hidden="true">
-          <path d="M2 16h18l2-6 3 12 2-8 2 4h35" class="sc-c" />
-        </svg>
-        <span class="step-n">3</span>
-        <h3>Hear the difference</h3>
-        <p>Everything shared cancels to silence. What's left is the hidden part.</p>
-      </article>
     </section>
 
     <div class="workbench" id="workbench" hidden>
@@ -334,10 +305,19 @@
                 title="Only what's panned to the middle">Center</button>
               <button type="button" data-part="sides" aria-pressed="false"
                 title="Only what differs between left and right">Sides</button>
+              <button type="button" data-part="mix" aria-pressed="false"
+                title="Blend the center against the sides">Mix</button>
               <button type="button" data-part="position" aria-pressed="false"
                 title="Only what sits at one position, left to right">Position</button>
             </div>
             <span class="busy-note" aria-hidden="true">Working…</span>
+            <div class="mix-pick" id="mixPick" hidden>
+              <span>Center</span>
+              <input type="range" id="stereoMix" min="0" max="100" step="1" value="50"
+                aria-label="Balance between the center and the sides" aria-valuetext="Even">
+              <span>Sides</span>
+              <output id="stereoMixOut" for="stereoMix">Even</output>
+            </div>
             <div class="pan-pick" id="panPick" hidden>
               <div class="pan-track">
                 <canvas id="panCanvas" aria-hidden="true"></canvas>

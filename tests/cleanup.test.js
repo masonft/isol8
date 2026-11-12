@@ -81,6 +81,21 @@ assert(t1 > t0, "a sustained hidden sound should come out cleaner, not be remove
   const mono = [new Float32Array(10)];
   assert(E.stereoPart(mono, "center") === mono, "mono passes through untouched");
   console.log("  stereo center/sides split checks out");
+
+  // mixing the two: the ends match the split, the middle is the original, in between one side is turned down
+  const [m0L, m0R] = E.stereoMix([Lc, Rc], 0), [m1L, m1R] = E.stereoMix([Lc, Rc], 1), [qL, qR] = E.stereoMix([Lc, Rc], 0.25), [hL, hR] = E.stereoMix([Lc, Rc], 0.75);
+  let endErr = 0, quarterErr = 0;
+  for (let i = 0; i < m; i++) {
+    endErr = Math.max(endErr, Math.abs(m0L[i] - cL[i]), Math.abs(m0R[i] - cR[i]), Math.abs(m1L[i] - sL[i]), Math.abs(m1R[i] - sR[i]));
+    quarterErr = Math.max(quarterErr, Math.abs(qL[i] - (cL[i] + 0.5 * sL[i])), Math.abs(qR[i] - (cR[i] + 0.5 * sR[i])),
+      Math.abs(hL[i] - (0.5 * cL[i] + sL[i])), Math.abs(hR[i] - (0.5 * cR[i] + sR[i])));
+  }
+  assert(endErr < 1e-6, "mix at 0 is the center alone and at 1 the sides alone");
+  assert(quarterErr < 1e-6, "below the middle the sides are turned down, above it the center is");
+  const pair = [Lc, Rc];
+  assert(E.stereoMix(pair, 0.5) === pair, "mix in the middle leaves the original untouched");
+  assert(E.stereoMix(mono, 0.2) === mono, "mono passes through the mix untouched");
+  console.log("  stereo center/sides mix checks out");
 }
 
 console.log("cleanup tests passed");

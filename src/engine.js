@@ -868,6 +868,23 @@
   }
 
   /**
+   * Blend the center against the sides. balance 0 is the center alone, 0.5 the untouched
+   * original and 1 the sides alone: below 0.5 the sides are turned down and above it the center
+   * is, so one of the two always stays at full level. Mono input is returned unchanged.
+   */
+  function stereoMix(channels, balance) {
+    if (channels.length < 2) return channels;
+    const b = Math.max(0, Math.min(1, balance)), gm = Math.min(1, 2 * (1 - b)), gs = Math.min(1, 2 * b);
+    if (gm === 1 && gs === 1) return channels;
+    const L = channels[0], R = channels[1], n = L.length, a = new Float32Array(n), c = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const m = gm * 0.5 * (L[i] + R[i]), s = gs * 0.5 * (L[i] - R[i]);
+      a[i] = m + s; c[i] = m - s;
+    }
+    return [a, c];
+  }
+
+  /**
    * Low-cut and/or high-cut, zero phase (each 2nd-order Butterworth runs forwards then
    * backwards, so 24 dB/octave and no time shift: the filtered isolation still lines up with
    * the song, which "Song without this sound" relies on). lowHz/highHz of 0 or null = off.
@@ -1081,7 +1098,7 @@
   }
 
   return {
-    detectTwins, isolate, cancelDb, mono, DEFAULTS, probePair, cancelDbOf, denoise, stereoPart, bandLimit, panExtract, panMap,
+    detectTwins, isolate, cancelDb, mono, DEFAULTS, probePair, cancelDbOf, denoise, stereoPart, stereoMix, bandLimit, panExtract, panMap,
     // pipeline steps (worker pool)
     prepare, features, lagRange, coarseScan, selectCandidates, analyseCandidate, explained, finalize,
     // internals exposed for tests

@@ -654,7 +654,6 @@
     $("status").hidden = !t || (t.status !== "busy" && t.status !== "queued");
     $("scopeLegend").hidden = !t || t.status !== "done" || !t.results.length;
     $("workbench").hidden = !t || t.status !== "done";
-    $("intro").hidden = state.tracks.length > 0;
     renderSettingsHead();
     document.body.classList.toggle("busy", state.tracks.some((x) => x.status === "busy" || x.status === "queued"));
     wakeScope();
@@ -781,7 +780,7 @@
   };
   function loadClean() {
     // only noise reduction is remembered between visits; stereo and filter start fresh
-    const def = { noise: false, amount: 0.5, stereo: "full", pan: 0, focus: 0.25, low: 0, high: 0 };
+    const def = { noise: false, amount: 0.5, stereo: "full", mix: 0.5, pan: 0, focus: 0.25, low: 0, high: 0 };
     try {
       const v = JSON.parse(localStorage.getItem("isol8-clean"));
       if (v && typeof v === "object") return { ...def, noise: !!v.noise, amount: Number.isFinite(v.amount) ? Math.max(0, Math.min(1, v.amount)) : def.amount };
@@ -861,7 +860,8 @@
     if (clean.stereo === "position") {
       if (!base.panMap) base.panMap = E.panMap(iso, p.sr, 61);
       iso = E.panExtract(iso, p.sr, clean.pan, clean.focus);
-    } else iso = E.stereoPart(iso, clean.stereo);
+    } else if (clean.stereo === "mix") iso = E.stereoMix(iso, clean.mix);
+    else iso = E.stereoPart(iso, clean.stereo);
     iso = E.bandLimit(iso, p.sr, clean.low, clean.high);
     $("player").classList.remove("working");
     if (player.key !== key || result() !== p || currentLag() !== lag || JSON.stringify(player.clean) !== cleanTag) return;
@@ -1127,6 +1127,7 @@
     full: "",
     center: "Center only: keeps what's panned to the middle, like most lead vocals and ad-libs, and drops stereo width and effects.",
     sides: "Sides only: keeps what differs between left and right, like reverb, stereo effects and hard-panned parts. Centered sounds disappear.",
+    mix: "Blends the center against the sides. In the middle you hear both as they are; slide left to turn the sides down, or right to turn the center down.",
     position: "Keeps only what sits at one spot between left and right. Each peak in the map is a sound; slide onto one, and narrow the focus to leave its neighbours out.",
   };
   function renderStereo() {
@@ -1137,6 +1138,7 @@
     });
     $("stereoHint").textContent = mono ? "This song is mono, so there's no center or sides to separate." : STEREO_HINT[player.clean.stereo];
     $("panPick").hidden = mono || player.clean.stereo !== "position";
+    $("mixPick").hidden = mono || player.clean.stereo !== "mix";
     renderShapeOutputs();
   }
 
@@ -1145,11 +1147,16 @@
   const lowHz = (v) => (v <= 0 ? 0 : 20 * Math.pow(100, v / 100));          // off, 20 Hz .. 2 kHz
   const highHz = (v) => (v >= 100 ? 0 : 500 * Math.pow(40, v / 100));       // 500 Hz .. 20 kHz, off
   const fmtHz = (f) => (!f ? "Off" : f < 1000 ? `${Math.round(f)} Hz` : `${(f / 1000).toFixed(f < 10000 ? 1 : 0)} kHz`);
+  /** Center/sides balance (0..1) in words: which of the two is turned down, and to how much. */
+  const fmtMix = (b) => (b <= 0 ? "Center only" : b >= 1 ? "Sides only" : Math.abs(b - 0.5) < 0.005 ? "Even"
+    : b < 0.5 ? `Sides at ${Math.round(b * 200)}%` : `Center at ${Math.round((1 - b) * 200)}%`);
   const fmtPan = (x) => (Math.abs(x) < 0.03 ? "Center" : `${Math.round(Math.abs(x) * 100)}% ${x < 0 ? "left" : "right"}`);
   function renderShapeOutputs() {
     const c = player.clean;
     $("panOut").textContent = fmtPan(c.pan);
     $("panPos").setAttribute("aria-valuetext", fmtPan(c.pan));
+    $("stereoMixOut").textContent = fmtMix(c.mix);
+    $("stereoMix").setAttribute("aria-valuetext", fmtMix(c.mix));
     const fv = Number($("panFocus").value);
     $("panFocusOut").textContent = fv < 25 ? "Narrow" : fv < 60 ? "Medium" : "Wide";
     $("lowCutOut").textContent = fmtHz(c.low);
@@ -1185,6 +1192,7 @@
       $(id).addEventListener("input", (e) => { player.clean[key] = map(Number(e.target.value)); renderShapeOutputs(); drawPanMap(); drawSpectrum(false); });
       $(id).addEventListener("change", (e) => setClean(key, map(Number(e.target.value))));
     };
+    live("stereoMix", "mix", (v) => v / 100);
     live("panPos", "pan", (v) => v / 100);
     live("panFocus", "focus", focusWidth);
     live("lowCut", "low", lowHz);
@@ -1526,6 +1534,7 @@
     const c = player.clean, parts = [];
     if (player.iso && player.iso.length > 1) {
       if (c.stereo === "center" || c.stereo === "sides") parts.push(c.stereo);
+      if (c.stereo === "mix" && c.mix !== 0.5) parts.push(fmtMix(c.mix).toLowerCase());
       if (c.stereo === "position") parts.push(`at ${fmtPan(c.pan)}`);
     }
     const hz = (f) => fmtHz(f).replace(" ", "");

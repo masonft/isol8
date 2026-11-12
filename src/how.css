@@ -1,14 +1,13 @@
 /* How it works page. Shares tokens and components with styles.css. */
-.how { max-width: 1120px; }
 .how h2 { font-size: clamp(26px, 3vw, 36px); letter-spacing: -0.03em; line-height: 1.1; margin-bottom: 16px; }
 .how p { color: var(--text-2); margin: 0 0 14px; font-size: 16px; }
 .how strong { color: var(--text); font-weight: 600; }
 .how em { color: var(--text); }
 .how code { font: 13.5px var(--mono); color: var(--lilac); background: var(--surface-2); border: 1px solid var(--line); padding: 1px 6px; border-radius: 6px; }
 
-.how-hero { text-align: center; padding: clamp(40px, 8vh, 90px) 0 30px; }
-.how-hero h1 { font-size: clamp(42px, 7vw, 84px); line-height: 1; letter-spacing: -0.045em; font-weight: 700; margin-bottom: 22px; }
-.how-hero .lede { max-width: 62ch; margin: 0 auto 40px; font-size: 17px; }
+.how-hero { padding: clamp(28px, 6vh, 56px) 0 24px; }
+.how-hero h1 { font-size: clamp(28px, 3.3vw, 42px); line-height: 1.12; letter-spacing: -0.02em; font-weight: 650; margin-bottom: 16px; }
+.how-hero .lede { max-width: 68ch; margin: 0 0 32px; font-size: 16.5px; }
 .how-hero .reveal:nth-child(1) { animation-delay: 0.05s; }
 .how-hero .reveal:nth-child(2) { animation-delay: 0.15s; }
 .how-hero .reveal:nth-child(3) { animation-delay: 0.25s; }
@@ -63,13 +62,12 @@ input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border: 0; bo
 .aside-note { font-size: 14.5px !important; padding: 14px 16px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); }
 
 .limits { padding-bottom: clamp(60px, 10vh, 100px); }
-.limit-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
-.limit { padding: 20px; border-radius: var(--r-lg); background: linear-gradient(180deg, var(--surface-2), transparent 130%); border: 1px solid var(--line); transition: transform 0.4s var(--ease-out), border-color 0.3s; }
-.limit:hover { transform: translateY(-3px); border-color: var(--line-2); }
-.limit h3 { font-size: 16px; margin-bottom: 8px; }
+/* a plain definition list: four limits, divided by rules rather than boxed as cards */
+.limit-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--line-2); }
+.limit { padding: 18px 20px 4px 0; }
+.limit + .limit { padding-left: 20px; border-left: 1px solid var(--line); }
+.limit h3 { font-size: 15px; margin-bottom: 6px; }
 .limit p { font-size: 14px; margin: 0; }
-.limits.shown .limit { animation: rise 0.8s var(--ease-out) both; }
-.limits .limit:nth-child(2) { animation-delay: 0.08s; } .limits .limit:nth-child(3) { animation-delay: 0.16s; } .limits .limit:nth-child(4) { animation-delay: 0.24s; }
 
 .private { padding-bottom: 60px; }
 .private-card { display: flex; align-items: center; gap: 22px; padding: 28px 32px; border-radius: var(--r-xl); flex-wrap: wrap; }
@@ -84,11 +82,13 @@ input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border: 0; bo
   .how-step, .playground, .inverse-sec { grid-template-columns: minmax(0, 1fr); gap: 24px; }
   .how-step:nth-child(even) .how-copy { order: 0; }
   .limit-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .how-hero { text-align: left; }
-  .how-hero .lede { margin-left: 0; }
+  .limit:nth-child(odd) { padding-left: 0; border-left: 0; }
+  .limit:nth-child(n + 3) { border-top: 1px solid var(--line); }
 }
 @media (max-width: 520px) {
   .limit-grid { grid-template-columns: minmax(0, 1fr); }
+  .limit, .limit + .limit { padding-left: 0; border-left: 0; }
+  .limit + .limit { border-top: 1px solid var(--line); }
   .how-fig canvas { height: 200px; }
   .private-card { padding: 22px; }
 }

@@ -57,8 +57,8 @@
 
   <main class="how">
     <section class="how-hero">
-      <h1 class="reveal">Two copies in.<br><span class="grad-text">One secret out.</span></h1>
-      <p class="lede reveal">When a producer copies a chorus and pastes it later in the song, the two copies are identical down to the last sample. Anything added on top of only one of them — an ad-lib, a riser, a vocal chop — is the only thing that differs. Subtract one copy from the other, and that's all you hear.</p>
+      <h1 class="reveal">How isol8 works</h1>
+      <p class="lede reveal">When a producer copies a chorus and pastes it later in the song, the two copies are identical down to the last sample. Anything added on top of only one of them, such as an ad-lib, a riser or a vocal chop, is the only thing that differs. Subtract one copy from the other and that's all you hear.</p>
       <div class="hero-demo reveal">
         <canvas class="demo" data-demo="hero" aria-label="Two waveforms drifting into alignment and cancelling, leaving a small hidden sound"></canvas>
       </div>
@@ -97,7 +97,7 @@
       <article class="how-step in-view">
         <div class="how-copy">
           <h2>Add them together</h2>
-          <p>Everything the two copies share cancels to silence. Whatever was only in one of them survives — that's the isolated result. In numbers: <code>result = twin − copy</code>.</p>
+          <p>Everything the two copies share cancels to silence. Whatever was only in one of them survives, and that's the isolated result. In numbers: <code>result = twin − copy</code>.</p>
           <p>isol8 measures how deep the cancellation goes (in dB) frame by frame, and keeps the stretch where it holds.</p>
         </div>
         <figure class="how-fig"><canvas class="demo" data-demo="sum" aria-label="The twin and the inverted copy summing to a quiet line with one surviving sound"></canvas>
@@ -125,7 +125,7 @@
       <div class="how-copy">
         <h2 id="invHead">Taking it out instead</h2>
         <p>Flip the isolated result and lay it back over the twin, and the hidden sound comes <em>out</em> of that section instead. isol8 does this across the whole track when you export <strong>Song without this sound</strong>: the full song, with that one sound gone.</p>
-        <p class="aside-note">Over the section itself, <code>twin − (twin − copy)</code> is just the copy, sample for sample — so the result is the song with the twin swapped for its clean sibling.</p>
+        <p class="aside-note">Over the section itself, <code>twin − (twin − copy)</code> is just the copy, sample for sample, so the result is the song with the twin swapped for its clean sibling.</p>
       </div>
       <figure class="how-fig"><canvas class="demo" data-demo="inverse" aria-label="The isolated sound being subtracted from the twin"></canvas>
         <figcaption><span class="k cyan"></span>Twin <span class="k lilac"></span>Isolated, inverted <span class="k mint"></span>Without it</figcaption></figure>

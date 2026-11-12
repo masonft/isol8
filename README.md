@@ -25,11 +25,11 @@ isol8 detects sections that repeat, such as a chorus, and phase-cancels one copy
 - Automatic segment detection
 - Waveform and section visualisation
 - Process results even further:
-  - Center & side channel extraction
+  - Center & side channel extraction (or a mix of the two)
   - Noise reduction
   - Crop/shorten
   - EQ with low & high cut
-- Opens FLAC, WAV, AIFF, MP3, M4A, OGG and Opus
+- Opens FLAC, WAV, AIFF, MP3, M4A, OGG and Opus (lossless preferred)
 - Save results locally as MP3 or WAV
 - Installable as an app: open songs with it from your file manager, or send them from the share sheet
 - Crossfade between the result and the original section for comparison
