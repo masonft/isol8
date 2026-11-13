@@ -7,7 +7,7 @@
   const C = {};
   function readPalette() {
     const cs = getComputedStyle(document.documentElement), v = (k) => cs.getPropertyValue(`--rgb-${k}`).trim().replace(/\s+/g, "");
-    Object.assign(C, { amber: v("amber"), cyan: v("cyan"), lilac: v("lilac"), mint: v("mint"), grid: v("ink"), muted: v("muted"), danger: v("danger") });
+    Object.assign(C, { amber: v("amber"), cyan: v("cyan"), lilac: v("lilac"), grid: v("ink"), muted: v("muted"), danger: v("danger") });
   }
   readPalette();
   const rgba = (c, a) => `rgba(${c},${a})`;
@@ -198,22 +198,6 @@
       label(g, dpr, "+", 12 * dpr, top, C.grid, 0.4);
       label(g, dpr, "=", 12 * dpr, bot, C.grid, 0.4);
     },
-
-    inverse(g, w, h, dpr, t) {
-      const cyc = 6, p = (t % cyc) / cyc;
-      const W = w / dpr, at = W * 0.55;
-      const amp = h * 0.1, r1 = h * 0.2, r2 = h * 0.48, r3 = h * 0.8;
-      const twin = (x) => song(x * 0.9) + blip(x, at, 36);
-      const isoInv = (x) => -blip(x, at, 36);
-      line(g, w, dpr, r1, amp, twin, C.cyan, 0.85, 1.8, 6);
-      line(g, w, dpr, r2, amp, isoInv, C.lilac, 0.95, 1.8, 12);
-      const sweep = ease((p - 0.1) / 0.45) * w * (p < 0.92 ? 1 : 0);
-      if (sweep > 0) line(g, w, dpr, r3, amp, (x) => twin(x) + isoInv(x), C.mint, 0.95, 2, 12, 0, sweep);
-      if (sweep > 0 && sweep < w) { g.fillStyle = rgba(C.mint, 0.7); g.fillRect(sweep - dpr, r1 - amp * 1.4, 2 * dpr, r3 - r1 + amp * 2.8); }
-      g.fillStyle = rgba(C.lilac, 0.05); g.fillRect((at - 50) * dpr, 0, 100 * dpr, h);
-      label(g, dpr, "+", 12 * dpr, r2, C.grid, 0.4);
-      label(g, dpr, "=", 12 * dpr, r3, C.grid, 0.4);
-    },
   };
   function mix(a, b, t) { const A = a.split(",").map(Number), B = b.split(",").map(Number); return A.map((v, i) => Math.round(v + (B[i] - v) * t)).join(","); }
 
@@ -298,7 +282,7 @@
       g.clearRect(0, 0, w, h);
       grid(g, w, h, dpr);
       // with reduced motion, freeze each demo on its most telling frame
-      const still = { hero: 3.5, find: 4.5, align: 3.5, flip: 2, sum: 4.5, inverse: 4.5 };
+      const still = { hero: 3.5, find: 4.5, align: 3.5, flip: 2, sum: 4.5 };
       const t = reduceMotion ? (still[c.name] || 0) : (now - c.t0) / 1000;
       demos[c.name] && demos[c.name](g, w, h, dpr, t, c.el);
       if (!reduceMotion && c.name !== "misalign") any = true;
