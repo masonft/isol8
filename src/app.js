@@ -137,7 +137,7 @@
     };
   })();
   const SAVED_FIELDS = ["id", "name", "file", "hash", "added", "status", "sr", "length", "format", "rateKnown", "quality", "opt",
-    "results", "debug", "elapsed", "error", "errorStage", "pick"];
+    "results", "debug", "elapsed", "error", "errorStage", "pick", "clean"];
   let saveWarned = false;
   function saveTrack(t) {
     if (!t || t.removed || !window.indexedDB) return;
@@ -648,6 +648,7 @@
   // --------------------------------------------------------- render: page
   function renderAll() {
     const t = track();
+    useClean();
     renderSession();
     $("dropPrompt").hidden = !!t;
     $("trackMeta").hidden = !t;
@@ -776,18 +777,23 @@
     ctx: null, nodes: null, playing: false, startedAt: 0, offset: 0,
     mode: "iso", key: null, buffers: null, iso: null, nudge: 0, best: null, duration: 0,
     blend: 1,            // 0 = twin, 1 = isolated (twin minus the whole copy)
-    clean: loadClean(),  // {noise, amount, stereo}: optional clean-up of the isolation (stereo isn't remembered between visits)
+    clean: null,         // {noise, amount, stereo, ...}: the current song's clean-up of the isolation (see useClean)
+    cleanFor: undefined, // id of the song player.clean belongs to
   };
-  function loadClean() {
-    // only noise reduction is remembered between visits; stereo and filter start fresh
-    const def = { noise: false, amount: 0.5, stereo: "full", mix: 0.5, pan: 0, focus: 0.25, low: 0, high: 0 };
-    try {
-      const v = JSON.parse(localStorage.getItem("isol8-clean"));
-      if (v && typeof v === "object") return { ...def, noise: !!v.noise, amount: Number.isFinite(v.amount) ? Math.max(0, Math.min(1, v.amount)) : def.amount };
-    } catch { /* storage off */ }
-    return def;
+  // Clean-up settings belong to one song: each starts from these and keeps its own (saved with the song).
+  const CLEAN_DEFAULTS = { noise: false, amount: 0.5, stereo: "full", mix: 0.5, pan: 0, focus: 0.25, low: 0, high: 0 };
+  try { localStorage.removeItem("isol8-clean"); } catch { /* storage off */ } // was shared by every song
+  player.clean = { ...CLEAN_DEFAULTS };
+  function saveClean() { const t = track(); if (t && t.clean === player.clean) saveTrack(t); }
+  /** Point the clean-up controls at the current song's settings, if the current song changed. */
+  function useClean() {
+    const t = track(), id = t ? t.id : null;
+    if (player.cleanFor === id) return;
+    player.cleanFor = id;
+    if (t) t.clean = { ...CLEAN_DEFAULTS, ...(t.clean || {}) };
+    player.clean = t ? t.clean : { ...CLEAN_DEFAULTS };
+    syncCleanControls();
   }
-  function saveClean() { try { localStorage.setItem("isol8-clean", JSON.stringify({ noise: player.clean.noise, amount: player.clean.amount })); } catch { /* storage off */ } }
 
   function renderPlayer() {
     const p = result(), t = track();
@@ -1202,6 +1208,20 @@
     renderStereo();
     $("cleanHint").textContent = player.clean.noise
       ? `Noise reduction at ${Math.round(player.clean.amount * 100)}%. Higher removes more of the leftover music, but can also soften quiet parts of the hidden sound.` : "";
+  }
+  /** Set every clean-up control from player.clean (on start and when switching songs). */
+  function syncCleanControls() {
+    const c = player.clean;
+    $("cleanNoise").checked = c.noise;
+    $("nrAmount").value = String(Math.round(c.amount * 100));
+    $("nrAmountOut").textContent = `${$("nrAmount").value}%`;
+    $("nrAmountWrap").hidden = !c.noise;
+    $("stereoMix").value = String(Math.round(c.mix * 100));
+    $("panPos").value = String(Math.round(c.pan * 100));
+    $("panFocus").value = String(Math.round(((c.focus - 0.06) / 0.54) * 100));
+    $("lowCut").value = String(c.low > 0 ? Math.round((100 * Math.log(c.low / 20)) / Math.log(100)) : 0);
+    $("highCut").value = String(c.high > 0 ? Math.round((100 * Math.log(c.high / 500)) / Math.log(40)) : 100);
+    renderCleanHint();
   }
   async function setClean(k, on) {
     player.clean[k] = on; saveClean();
@@ -2500,11 +2520,7 @@
     $("nudgeReset").addEventListener("click", () => nudge(0));
     $("download").addEventListener("click", download);
     $("blend").addEventListener("input", (e) => setBlend(e.target.value / 100));
-    $("cleanNoise").checked = player.clean.noise;
     $("cleanNoise").addEventListener("change", (e) => { $("nrAmountWrap").hidden = !e.target.checked; setClean("noise", e.target.checked); });
-    $("nrAmount").value = String(Math.round(player.clean.amount * 100));
-    $("nrAmountOut").textContent = `${$("nrAmount").value}%`;
-    $("nrAmountWrap").hidden = !player.clean.noise;
     $("nrAmount").addEventListener("input", (e) => { $("nrAmountOut").textContent = `${e.target.value}%`; });
     // rebuild once the slider is let go (a rebuild takes a moment on long sections)
     $("nrAmount").addEventListener("change", (e) => setClean("amount", e.target.value / 100));
@@ -2515,7 +2531,7 @@
       setClean("stereo", b.dataset.part);
       renderStereo();
     }));
-    renderStereo();
+    syncCleanControls();
     renderBlend();
     $("settingsToggle").addEventListener("click", () => toggleSettings());
     $("settingsBtn").addEventListener("click", () => toggleSettings());
